@@ -648,6 +648,16 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
             if os.path.exists(file_path) and os.path.getsize(file_path) > 1024:
                 return True, file_path
             else:
+                # Если файл пустой и это YouTube, пробуем альтернативные API
+                if any(d in original_url.lower() for d in ["youtube.com", "youtu.be", "youtube.com/shorts"]):
+                    logger.info(f"YouTube file empty, trying alternative APIs for: {original_url}")
+                    yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
+                    if yt_success:
+                        return True, yt_result
+                    # Пробуем Cobalt API как fallback
+                    cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
+                    if cobalt_success:
+                        return True, cobalt_result
                 return False, "❌ Файл не был скачан или пуст"
             
         except asyncio.TimeoutError:
