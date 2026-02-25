@@ -632,6 +632,7 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
                 'ignoreerrors': True,
                 'fragment_buffer_size': 1,
                 'extract_flat': False,
+                'cookiefile': 'youtube_cookies.txt',
             })
 
             if selected_proxy:
