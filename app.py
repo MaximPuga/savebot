@@ -599,16 +599,35 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
         elif "youtube.com" in url.lower() or "youtu.be" in url.lower():
             ydl_opts.update({
                 'format': 'best[filesize<50M][ext=mp4]/best[filesize<50M]/worst[ext=mp4]/worst',
-                'http_headers': {
-                    'User-Agent': config.DESKTOP_USER_AGENT,
+                'geo_bypass_country': 'US',
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': 'android',
+                        'player_skip': 'configs',
+                        'skip': 'dash',
+                    }
                 },
-                'socket_timeout': 60,
-                'extractor_retries': 10,
-                'fragment_retries': 10,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                },
+                'socket_timeout': 120,
+                'extractor_retries': 15,
+                'fragment_retries': 15,
+                'retries': 15,
             })
 
             if selected_proxy:
-                logger.info("YouTube download will use yt-dlp proxy")
+                logger.info("YouTube download will use yt-dlp proxy with Android client")
         
         # Устанавливаем формат в зависимости от типа
         if format_type == "mp4":
