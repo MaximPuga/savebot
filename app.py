@@ -533,7 +533,7 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
             ydl_opts['proxy'] = selected_proxy
             logger.info("yt-dlp will use proxy: %s", _mask_proxy(selected_proxy))
         
-        # Улучшенные параметры для TikTok
+        # Улучшенные параметры для TikTok (без прокси)
         if any(d in url.lower() for d in ["tiktok.com", "vt.tiktok.com", "vm.tiktok.com", "m.tiktok.com"]):
             ydl_opts.update({
                 'extractor_args': {
@@ -549,7 +549,10 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
                     'User-Agent': config.MOBILE_USER_AGENT,
                     'Referer': 'https://www.tiktok.com/',
                 },
+                'socket_timeout': 60,
+                'retries': 3,
             })
+            logger.info("TikTok download without proxy due to connection issues")
         
         # Улучшенные параметры для Instagram
         elif "instagram.com" in url.lower():
