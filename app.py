@@ -451,6 +451,61 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
     return False, "Instagram API не сработали"
 
 
+async def download_via_facebook_api(url: str, format_type: str) -> tuple[bool, str]:
+    """
+    Специализированные методы для Facebook.
+    """
+    logger.info(f"Trying Facebook APIs for: {url[:60]}...")
+    
+    # Пробуем разные Facebook downloader API
+    fb_apis = [
+        {"url": f"https://fdown.net/download.php?url={quote(url, safe='')}", "parser": "direct"},
+        {"url": f"https://getfb.net/facebook-video-downloader?url={quote(url, safe='')}", "parser": "json"},
+        {"url": f"https://fbdown.net/download?url={quote(url, safe='')}", "parser": "redirect"},
+    ]
+    
+    for api in fb_apis:
+        try:
+            logger.info(f"Trying Facebook API: {api['url'][:50]}...")
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=25),
+                headers={'User-Agent': config.DESKTOP_USER_AGENT}
+            ) as session:
+                async with session.get(api['url'], allow_redirects=True) as response:
+                    final_url = str(response.url)
+                    
+                    # Если редиректнуло на видео файл
+                    if any(ext in final_url for ext in ['.mp4', '.webm']):
+                        logger.info(f"Facebook API redirected to video")
+                        return await download_from_direct_url(final_url, format_type, "facebook_direct")
+                    
+                    if response.status != 200:
+                        continue
+                    
+                    content = await response.text()
+                    
+                    # Ищем ссылки на видео
+                    video_patterns = [
+                        r'href="(https?://[^"]+facebook[^"]*\.mp4[^"]*)"',
+                        r'href="(https?://[^"]+video[^"]*\.mp4[^"]*)"',
+                        r'src="(https?://[^"]+\.mp4[^"]*)"',
+                        r'url["\']?\s*[:=]\s*["\'](https?://[^"\']+facebook[^"\']+)["\']',
+                    ]
+                    
+                    for pattern in video_patterns:
+                        matches = re.findall(pattern, content, re.IGNORECASE)
+                        for match in matches:
+                            if '.mp4' in match or 'video' in match.lower():
+                                if not any(x in match.lower() for x in ['login', 'auth', 'error']):
+                                    logger.info(f"Found Facebook video URL via pattern")
+                                    return await download_from_direct_url(match, format_type, "facebook_api")
+        except Exception as e:
+            logger.warning(f"Facebook API error: {str(e)[:100]}")
+            continue
+    
+    return False, "Facebook API не сработали"
+
+
 async def download_via_youtube_api(url: str, format_type: str) -> tuple[bool, str]:
     """
     Специализированные методы для YouTube.
@@ -870,6 +925,12 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
                 if yt_success:
                     return True, yt_result
             
+            # Facebook fallback
+            if platform == "facebook":
+                fb_success, fb_result = await download_via_facebook_api(original_url, format_type)
+                if fb_success:
+                    return True, fb_result
+            
             # TikTok fallback
             if platform == "tiktok":
                 tikwm_success, tikwm_result = await download_via_tikwm(original_url)
@@ -881,6 +942,12 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
                 insta_success, insta_result = await download_via_instagram_api(original_url, format_type)
                 if insta_success:
                     return True, insta_result
+            
+            # YouTube fallback (если еще не пробовали)
+            if platform == "youtube":
+                yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
+                if yt_success:
+                    return True, yt_result
             
             # Общий fallback
             cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
