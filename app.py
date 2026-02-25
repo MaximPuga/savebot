@@ -484,10 +484,10 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
         proxy_single = os.getenv("YTDLP_PROXY", "").strip()
         if not proxy_single:
             proxy_single = os.getenv("PROXY_URL", "").strip()  # Fallback for Railway
+        
+        # No proxy by default - yt-dlp works better without proxy on Railway for YouTube
         if not proxy_single:
-            # Railway not passing env vars - embed proxy directly for testing
-            proxy_single = "socks5h://56c32979554635b4:Oht7leWy@res.geonix.com:10000"
-            logger.warning("Using hardcoded proxy (Railway env vars not working)")
+            logger.info("No proxy configured - using direct connection (recommended for Railway)")
 
         proxies: list[str] = []
         if proxies_raw:
