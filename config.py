@@ -1,5 +1,5 @@
 # Telegram Bot Token
-TELEGRAM_TOKEN = "8695733465:AAFgZN9SLasbfxzYbzobF9ldKgOaEVYIxvg"
+TELEGRAM_TOKEN = "8654931118:AAEcsEsVX0tui9RQFRyvuBjQJqgY168ACMs"
 
 # Альтернативные API сервисы (без авторизации)
 # Эти сервисы скачивают через свои API, не требуют твоих данных
