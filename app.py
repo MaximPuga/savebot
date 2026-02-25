@@ -924,10 +924,17 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Операция отменена")
         
     elif callback.data == "format_mp4":
-        processing_msg = await callback.message.edit_text(
-            "⏳ Скачиваю видео...\n\n"
-            "Это может занять до 2 минут"
-        )
+        try:
+            processing_msg = await callback.message.edit_text(
+                "⏳ Скачиваю видео...\n\n"
+                "Это может занять до 2 минут"
+            )
+        except Exception:
+            # Если не удалось отредактировать, отправляем новое сообщение
+            processing_msg = await callback.message.answer(
+                "⏳ Скачиваю видео...\n\n"
+                "Это может занять до 2 минут"
+            )
         await callback.answer("📥 Загрузка началась!")
         
         # Получаем ссылку из состояния
@@ -945,10 +952,17 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         
     elif callback.data == "format_jpg":
-        processing_msg = await callback.message.edit_text(
-            "⏳ Скачиваю фото...\n\n"
-            "Это может занять до 1 минуты"
-        )
+        try:
+            processing_msg = await callback.message.edit_text(
+                "⏳ Скачиваю фото...\n\n"
+                "Это может занять до 1 минуты"
+            )
+        except Exception:
+            # Если не удалось отредактировать, отправляем новое сообщение
+            processing_msg = await callback.message.answer(
+                "⏳ Скачиваю фото...\n\n"
+                "Это может занять до 1 минуты"
+            )
         await callback.answer("📥 Загрузка началась!")
         
         # Получаем ссылку из состояния
