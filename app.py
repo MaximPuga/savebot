@@ -661,7 +661,7 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
         
         # Если это ошибка платформы, пробуем альтернативные API
         if any(platform in error_msg.lower() for platform in ["tiktok", "instagram", "pinterest", "facebook"]) or \
-           any(error in error_msg.lower() for error in ["rate-limit", "login required", "403", "sigi state", "unable to extract"]):
+           any(error in error_msg.lower() for error in ["rate-limit", "login required", "403", "sigi state", "unable to extract", "file is empty", "fragment", "forbidden"]):
             
             # СПЕЦИАЛЬНЫЙ ФИКС ДЛЯ YOUTUBE (403 ошибки)
             if any(d in original_url.lower() for d in ["youtube.com", "youtu.be", "youtube.com/shorts"]) or \
