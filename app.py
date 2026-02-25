@@ -218,21 +218,31 @@ async def download_via_cobalt(url: str, format_type: str) -> tuple[bool, str]:
     
     for api_url in cobalt_instances:
         try:
+            logger.info(f"Trying Cobalt: {api_url}")
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
                 async with session.post(api_url, headers=headers, json=payload) as response:
+                    logger.info(f"Cobalt {api_url} status: {response.status}")
                     if response.status == 200:
                         data = await response.json()
+                        logger.info(f"Cobalt response: {data}")
                         if data.get("url"):
                             return await download_from_direct_url(data["url"], format_type, "cobalt")
+                        elif data.get("error"):
+                            logger.warning(f"Cobalt error: {data.get('error')}")
+                    else:
+                        text = await response.text()
+                        logger.warning(f"Cobalt {api_url} failed: {response.status} - {text[:200]}")
                     
                     # Пробуем упрощенный payload
-                    if response.status == 400:
+                    if response.status in (400, 422):
                         async with session.post(api_url, headers=headers, json={"url": url}) as resp2:
+                            logger.info(f"Cobalt simple payload status: {resp2.status}")
                             if resp2.status == 200:
                                 data = await resp2.json()
                                 if data.get("url"):
                                     return await download_from_direct_url(data["url"], format_type, "cobalt")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Cobalt {api_url} exception: {str(e)}")
             continue
     
     return False, "SERVER_UNAVAILABLE"
@@ -542,10 +552,17 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
         })
     
     elif platform == "youtube":
+        # Используем формат без HLS/m3u8 чтобы избежать 403 на фрагментах
         ydl_opts.update({
-            'format': 'worst[ext=mp4]/worst',
+            'format': 'worst[protocol=https][ext=mp4]/worst[protocol=https]/worst[ext=mp4]/worst',
             'socket_timeout': 60,
             'retries': 3,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['webpage', 'config', 'js'],
+                }
+            },
         })
     
     # Формат
