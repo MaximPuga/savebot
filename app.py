@@ -249,75 +249,215 @@ async def download_via_cobalt(url: str, format_type: str) -> tuple[bool, str]:
 
 
 async def download_via_tikwm(url: str) -> tuple[bool, str]:
-    """Скачивает TikTok через TikWM API."""
+    """
+    Скачивает TikTok через TikWM API и другие альтернативы.
+    """
+    # TikWM - самый надежный
     try:
+        logger.info("Trying TikWM API")
         payload = {'url': url, 'count': 1, 'cursor': 0, 'web': 1}
         
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
             async with session.post("https://www.tikwm.com/api/", data=payload) as response:
-                if response.status != 200:
-                    return False, "TikWM API ошибка"
-                
-                res_json = await response.json()
-                if res_json.get('code') != 0:
-                    return False, f"TikWM: {res_json.get('msg', 'unknown error')}"
-                
-                data = res_json.get('data', {})
-                video_url = data.get('play') or data.get('wmplay') or data.get('hdplay')
-                
-                if not video_url:
-                    return False, "TikWM не нашел видео"
-                
-                if video_url.startswith('/'):
-                    video_url = "https://www.tikwm.com" + video_url
-                
-                return await download_from_direct_url(video_url, "mp4", "tikwm")
+                if response.status == 200:
+                    res_json = await response.json()
+                    if res_json.get('code') == 0:
+                        data = res_json.get('data', {})
+                        # Пробуем разные поля с видео
+                        video_url = (data.get('hdplay') or 
+                                    data.get('play') or 
+                                    data.get('wmplay') or 
+                                    data.get('video_0'))
+                        
+                        if video_url:
+                            if video_url.startswith('/'):
+                                video_url = "https://www.tikwm.com" + video_url
+                            logger.info(f"TikWM found video: {video_url[:60]}...")
+                            return await download_from_direct_url(video_url, "mp4", "tikwm")
+                        
+                        # Пробуем получить URL из других полей
+                        if 'images' in data:
+                            # Это может быть карусель фото
+                            logger.info("TikWM: found image carousel, not video")
+                else:
+                    logger.warning(f"TikWM returned {response.status}")
     except Exception as e:
-        return False, str(e)
+        logger.warning(f"TikWM error: {str(e)}")
+    
+    # SSSTik.io - другой надежный сервис
+    try:
+        logger.info("Trying SSSTik API")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            # Получаем токен
+            async with session.get("https://ssstik.io/ru") as token_resp:
+                if token_resp.status == 200:
+                    html = await token_resp.text()
+                    # Ищем токен в HTML
+                    import re
+                    token_match = re.search(r'name="_token" value="([^"]+)"', html)
+                    if token_match:
+                        token = token_match.group(1)
+                        
+                        # Делаем запрос на скачивание
+                        payload = {
+                            'id': url,
+                            'locale': 'ru',
+                            'tt': token
+                        }
+                        
+                        async with session.post(
+                            "https://ssstik.io/abc?url=dl",
+                            data=payload,
+                            headers={'User-Agent': config.DESKTOP_USER_AGENT}
+                        ) as dl_resp:
+                            if dl_resp.status == 200:
+                                dl_html = await dl_resp.text()
+                                # Ищем ссылку на видео
+                                video_match = re.search(r'href="(https?://[^"]+\.mp4[^"]*)"', dl_html)
+                                if video_match:
+                                    video_url = video_match.group(1)
+                                    logger.info(f"SSSTik found video URL")
+                                    return await download_from_direct_url(video_url, "mp4", "ssstik")
+    except Exception as e:
+        logger.warning(f"SSSTik error: {str(e)}")
+    
+    # SnapTik - еще один вариант
+    try:
+        logger.info("Trying SnapTik API")
+        api_url = f"https://snaptik.app/abc?url={url}"
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with session.get(api_url, headers={'User-Agent': config.DESKTOP_USER_AGENT}) as response:
+                if response.status == 200:
+                    text = await response.text()
+                    # Ищем video URL
+                    import re
+                    video_match = re.search(r'data-video-url="([^"]+)"', text)
+                    if video_match:
+                        video_url = video_match.group(1)
+                        logger.info(f"SnapTik found video URL")
+                        return await download_from_direct_url(video_url, "mp4", "snaptik")
+    except Exception as e:
+        logger.warning(f"SnapTik error: {str(e)}")
+    
+    return False, "Все TikTok API не сработали"
 
 
 async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, str]:
-    """Специализированные методы для Instagram."""
-    apis = [
-        {"url": "https://downloadgram.org/wp-json/aio-dl/data", "data": {"url": url, "action": "post"}},
-        {"url": "https://snapinsta.app/action.php", "data": {"url": url, "action": "post"}},
-        {"url": "https://saveinsta.app/api/ajaxSearch", "data": {"q": url, "t": "media", "lang": "en"}},
-    ]
+    """
+    Специализированные методы для Instagram.
+    Использует API и парсинг для получения медиа.
+    """
+    # DownloadGram API
+    try:
+        logger.info("Trying DownloadGram API")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            data = {"url": url, "action": "post"}
+            async with session.post(
+                "https://downloadgram.org/wp-json/aio-dl/data",
+                data=data,
+                headers={'User-Agent': config.DESKTOP_USER_AGENT, 'Referer': 'https://downloadgram.org/'}
+            ) as response:
+                if response.status == 200:
+                    try:
+                        result = await response.json()
+                        if result and 'data' in result:
+                            media_data = result['data']
+                            if isinstance(media_data, list) and len(media_data) > 0:
+                                # Берем первое медиа
+                                first_media = media_data[0]
+                                if 'url' in first_media:
+                                    media_url = first_media['url']
+                                    logger.info(f"DownloadGram found media")
+                                    return await download_from_direct_url(media_url, format_type, "downloadgram")
+                    except:
+                        # Пробуем найти URL в тексте
+                        text = await response.text()
+                        import re
+                        urls = re.findall(r'https?://[^\s"<>\']+\.(?:mp4|jpg|jpeg|png)', text)
+                        if urls:
+                            logger.info(f"DownloadGram found URL in text")
+                            return await download_from_direct_url(urls[0], format_type, "downloadgram")
+    except Exception as e:
+        logger.warning(f"DownloadGram error: {str(e)}")
     
-    video_patterns = [
-        r'https?://[^\s"\'<>]+\.mp4[^\s"\'<>]*',
-        r'"(https?://[^"]+video[^"]*)"',
-        r'href="(https?://[^"]+\.mp4[^"]*)"',
-        r'url["\']?\s*[:=]\s*["\'](https?://[^"\']+)["\']',
-    ]
+    # SnapInsta API
+    try:
+        logger.info("Trying SnapInsta API")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            data = {"url": url, "action": "post"}
+            headers = {
+                'User-Agent': config.DESKTOP_USER_AGENT,
+                'Referer': 'https://snapinsta.app/',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+            
+            async with session.post(
+                "https://snapinsta.app/action.php",
+                data=data,
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    text = await response.text()
+                    import re
+                    
+                    # Ищем ссылки на видео/фото
+                    video_match = re.search(r'href="(https?://[^"]+\.mp4[^"]*)"', text, re.IGNORECASE)
+                    if video_match:
+                        video_url = video_match.group(1)
+                        logger.info(f"SnapInsta found video")
+                        return await download_from_direct_url(video_url, format_type, "snapinsta")
+                    
+                    # Ищем фото
+                    photo_match = re.search(r'href="(https?://[^"]+\.(?:jpg|jpeg|png)[^"]*)"', text, re.IGNORECASE)
+                    if photo_match and format_type == "jpg":
+                        photo_url = photo_match.group(1)
+                        logger.info(f"SnapInsta found photo")
+                        return await download_from_direct_url(photo_url, format_type, "snapinsta")
+    except Exception as e:
+        logger.warning(f"SnapInsta error: {str(e)}")
     
-    for api in apis:
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.post(
-                    api['url'],
-                    data=api['data'],
-                    headers={'User-Agent': config.DESKTOP_USER_AGENT, 'Referer': api['url']}
-                ) as response:
-                    if response.status != 200:
-                        continue
-                    
-                    content = await response.text()
-                    
-                    for pattern in video_patterns:
-                        matches = re.findall(pattern, content, re.IGNORECASE)
-                        for match in matches:
-                            if match and ('.mp4' in match or 'video' in match.lower()):
-                                if not any(x in match.lower() for x in ['google', 'facebook', 'twitter', 'youtube']):
-                                    return await download_from_direct_url(match, format_type, "instagram_api")
-        except Exception:
-            continue
+    # ImgInn - для постов без API
+    try:
+        logger.info("Trying ImgInn redirect")
+        # ImgInn позволяет смотреть посты без авторизации
+        shortcode = None
+        import re
+        match = re.search(r'/p/([^/]+)', url)
+        if match:
+            shortcode = match.group(1)
+            imginn_url = f"https://imginn.com/p/{shortcode}"
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                async with session.get(imginn_url, headers={'User-Agent': config.DESKTOP_USER_AGENT}) as response:
+                    if response.status == 200:
+                        html = await response.text()
+                        # Ищем видео
+                        video_match = re.search(r'src="(https?://[^"]+instagram[^"]+\.mp4[^"]*)"', html)
+                        if video_match:
+                            video_url = video_match.group(1)
+                            logger.info(f"ImgInn found video")
+                            return await download_from_direct_url(video_url, format_type, "imginn")
+                        
+                        # Ищем фото
+                        photo_match = re.search(r'src="(https?://[^"]+instagram[^"]+\.(?:jpg|jpeg)[^"]*)"', html)
+                        if photo_match and format_type == "jpg":
+                            photo_url = photo_match.group(1)
+                            logger.info(f"ImgInn found photo")
+                            return await download_from_direct_url(photo_url, format_type, "imginn")
+    except Exception as e:
+        logger.warning(f"ImgInn error: {str(e)}")
     
     return False, "Instagram API не сработали"
 
 
 async def download_via_youtube_api(url: str, format_type: str) -> tuple[bool, str]:
-    """Специализированные методы для YouTube."""
+    """
+    Специализированные методы для YouTube.
+    Использует реальные API для скачивания видео.
+    """
+    import yt_dlp  # Для получения info и fallback
+    
     # Извлекаем video ID
     patterns = [
         r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
@@ -335,20 +475,125 @@ async def download_via_youtube_api(url: str, format_type: str) -> tuple[bool, st
     if not video_id:
         return False, "Не удалось извлечь YouTube video ID"
     
-    # YouTube Info API
-    api_url = f"https://yt.lemnoslife.com/videos?part=snippet,contentDetails&id={video_id}"
+    logger.info(f"YouTube video ID: {video_id}")
     
+    # Пробуем прямые download API
+    youtube_apis = [
+        # RapidAPI - YTDownload (требует ключ, но пробуем публичные)
+        f"https://yt.lemnoslife.com/videos?part=snippet&id={video_id}",
+        # Invidious instances (работают без API ключа)
+        f"https://iv.datura.network/api/v1/videos/{video_id}",
+        f"https://vid.puffyan.us/api/v1/videos/{video_id}",
+        f"https://iv.nboeck.de/api/v1/videos/{video_id}",
+        f"https://iv.melmac.space/api/v1/videos/{video_id}",
+        f"https://iv.nboeck.de/api/v1/videos/{video_id}",
+        # Piped instances
+        f"https://pipedapi.kavin.rocks/streams/{video_id}",
+        f"https://api.piped.projectkreators.com/streams/{video_id}",
+    ]
+    
+    headers = {
+        'User-Agent': config.DESKTOP_USER_AGENT,
+        'Accept': 'application/json',
+    }
+    
+    for api_url in youtube_apis:
+        try:
+            logger.info(f"Trying YouTube API: {api_url}")
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+                async with session.get(api_url, headers=headers) as response:
+                    if response.status != 200:
+                        logger.warning(f"API {api_url} returned {response.status}")
+                        continue
+                    
+                    content_type = response.headers.get('Content-Type', '')
+                    
+                    # Если вернулся прямой файл (редко, но бывает)
+                    if 'video/' in content_type or 'application/octet-stream' in content_type:
+                        logger.info(f"API returned direct video file")
+                        return await download_from_direct_url(api_url, format_type, "youtube_api")
+                    
+                    # JSON ответ
+                    if 'json' in content_type:
+                        data = await response.json()
+                        
+                        # Invidious формат
+                        if 'formatStreams' in data or 'adaptiveFormats' in data:
+                            formats = data.get('formatStreams', []) + data.get('adaptiveFormats', [])
+                            for fmt in formats:
+                                if 'url' in fmt and 'type' in fmt:
+                                    if 'video' in fmt['type'] and 'mp4' in fmt['type']:
+                                        logger.info(f"Found Invidious video URL")
+                                        return await download_from_direct_url(fmt['url'], format_type, "youtube_invidious")
+                        
+                        # Piped формат  
+                        if 'videoStreams' in data or 'audioStreams' in data:
+                            streams = data.get('videoStreams', [])
+                            if streams:
+                                # Берем первый поток (обычно есть URL)
+                                for stream in streams:
+                                    if stream.get('url'):
+                                        logger.info(f"Found Piped video URL")
+                                        return await download_from_direct_url(stream['url'], format_type, "youtube_piped")
+                        
+                        # YT LemnosLife - только info, но можем построить URL
+                        if 'items' in data:
+                            logger.info(f"YT API confirmed video exists, trying fallback")
+                            # Не дает прямой URL, но подтверждает что видео существует
+                            # Вернемся к yt-dlp с этим знанием
+                            
+        except Exception as e:
+            logger.warning(f"YouTube API {api_url} error: {str(e)}")
+            continue
+    
+    # Fallback: пробуем yt-dlp с прокси (если доступен) и специальными опциями
+    logger.info("All YouTube APIs failed, trying yt-dlp with special options")
+    
+    # Пробуем yt-dlp с другими клиентами
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            async with session.get(api_url, headers={'User-Agent': config.DESKTOP_USER_AGENT}) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data and data.get('items'):
-                        return True, f"https://www.youtube.com/watch?v={video_id}"
-    except Exception:
-        pass
+        download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
+        os.makedirs(download_dir, exist_ok=True)
+        
+        # Пробуем разные клиенты YouTube
+        clients = ['android', 'web', 'ios', 'mweb']
+        
+        for client in clients:
+            try:
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'outtmpl': os.path.join(download_dir, f"%(title).{FILENAME_MAX_LEN}s.%(ext)s"),
+                    'format': 'best[protocol=https][ext=mp4]/best[ext=mp4]/best',
+                    'socket_timeout': 30,
+                    'retries': 2,
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': [client],
+                            'player_skip': ['webpage', 'config', 'js'] if client != 'web' else [],
+                        }
+                    },
+                }
+                
+                def download():
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
+                        return ydl.prepare_filename(info)
+                
+                loop = asyncio.get_event_loop()
+                file_path = await asyncio.wait_for(loop.run_in_executor(None, download), timeout=60)
+                
+                if os.path.exists(file_path) and os.path.getsize(file_path) > MIN_FILE_SIZE:
+                    logger.info(f"yt-dlp with {client} client succeeded")
+                    return True, file_path
+                    
+            except Exception as e:
+                logger.warning(f"yt-dlp with {client} client failed: {str(e)[:100]}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"yt-dlp fallback error: {str(e)}")
     
-    return False, "YouTube API не сработал"
+    return False, "Все YouTube методы не сработали"
 
 
 async def download_via_alternative_api(url: str, format_type: str) -> tuple[bool, str]:
