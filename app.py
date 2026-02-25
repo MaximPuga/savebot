@@ -1033,3 +1033,22 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# Веб-сервер для Replit (чтобы был открыт порт)
+from flask import Flask
+import threading
+
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Telegram Bot is running!"
+
+def run_web_server():
+    web_app.run(host='0.0.0.0', port=5000)
+
+# Запускаем веб-сервер в отдельном потоке
+web_thread = threading.Thread(target=run_web_server, daemon=True)
+web_thread.start()
+
+print("Веб-сервер запущен на порту 5000 для Replit")
