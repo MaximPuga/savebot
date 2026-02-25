@@ -4,14 +4,17 @@ TELEGRAM_TOKEN = ""  # <-- пусто
 # Альтернативные API сервисы (без авторизации)
 # Эти сервисы скачивают через свои API, не требуют твоих данных
 
-# TikTok download APIs (исключаем parklogic.com сервисы)
+# TikTok download APIs (только рабочие сервисы)
 TIKTOK_APIS = [
+    "https://tikmate.online/download?url=",
+    "https://ssstik.io/download?url=",
+    "https://tikdownload.cc/download?url=",
+    "https://musicaldown.com/download?url=",
+    "https://tiktokdownloadr.com/download?url=",
+    "https://ttdown.org/download?url=",
     "https://snaptik.app/abc?url=",
-    "https://tiktokdownload.online/?url=",
-    "https://ttdownloader.io/download?url=",
     "https://tiktokonly.net/download?url=",
     "https://lovetik.com/download?url=",
-    "https://ttdown.org/download?url=",
     "https://tiktokdownload.app/download?url=",
     "https://tikmate.cc/download?url=",
     "https://snaptik.cc/download?url=",
