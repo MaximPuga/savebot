@@ -477,7 +477,7 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
         download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
         os.makedirs(download_dir, exist_ok=True)
         
-        output_path = os.path.join(download_dir, "%(title)s.%(ext)s")
+        output_path = os.path.join(download_dir, "%(title).80s.%(ext)s")
         
         # Proxy support for yt-dlp (useful for YouTube 403 on datacenter IPs)
         proxies_raw = os.getenv("YTDLP_PROXIES", "").strip()
