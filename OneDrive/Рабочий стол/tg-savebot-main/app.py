@@ -350,18 +350,20 @@ async def download_via_tikwm(url: str) -> tuple[bool, str]:
 async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, str]:
     """
     Специализированные методы для Instagram.
-    Использует API и парсинг для получения медиа.
+    Фокус на API без авторизации.
     """
-    # Сначала пробуем SaveInsta API (работает для фото без авторизации)
+    # SaveInsta - самый надежный без логина
     try:
-        logger.info("Trying SaveInsta API")
+        logger.info("Trying SaveInsta API (no login required)")
         encoded_url = quote(url, safe='')
         api_url = f"https://saveinsta.app/api?url={encoded_url}"
         
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
             headers = {
-                'User-Agent': config.DESKTOP_USER_AGENT,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
                 'Referer': 'https://saveinsta.app/',
+                'Origin': 'https://saveinsta.app'
             }
             async with session.get(api_url, headers=headers) as response:
                 if response.status == 200:
@@ -369,99 +371,88 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
                     if data.get('status') == 'success' and data.get('data'):
                         items = data['data']
                         if isinstance(items, list) and len(items) > 0:
-                            # Для фото берем первое
-                            media_url = items[0].get('url') or items[0].get('image_url') or items[0].get('video_url')
-                            if media_url:
-                                logger.info(f"SaveInsta found media")
-                                ext = '.jpg' if format_type == 'jpg' or 'image' in media_url else '.mp4'
-                                return await download_from_direct_url(media_url, ext.replace('.', ''), "saveinsta")
+                            # Берем первое доступное медиа
+                            for item in items:
+                                media_url = item.get('url') or item.get('image_url') or item.get('video_url')
+                                if media_url and not any(blocked in media_url.lower() for blocked in ['login', 'auth']):
+                                    logger.info(f"SaveInsta found media: {media_url[:50]}...")
+                                    ext = '.jpg' if format_type == 'jpg' or 'image' in media_url else '.mp4'
+                                    return await download_from_direct_url(media_url, ext.replace('.', ''), "saveinsta")
     except Exception as e:
-        logger.warning(f"SaveInsta error: {str(e)[:100]}")
+        logger.warning(f"SaveInsta error: {str(e)[:80]}")
     
-    # Пробуем IGram API
+    # IGram - работает для публичного контента
     try:
-        logger.info("Trying IGram API")
+        logger.info("Trying IGram API (public content only)")
         encoded_url = quote(url, safe='')
-        api_url = f"https://api.igram.world/api/convert?url={encoded_url}"
+        api_url = f"https://igram.world/api/convert?url={encoded_url}"
         
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
             headers = {
-                'User-Agent': config.DESKTOP_USER_AGENT,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json',
+                'Referer': 'https://igram.world/'
             }
             async with session.get(api_url, headers=headers) as response:
                 if response.status == 200:
                     data = await response.json()
-                    if data.get('url') or data.get('download_url') or data.get('media'):
-                        media_url = data.get('url') or data.get('download_url') or data.get('media', [{}])[0].get('url')
-                        if media_url:
-                            logger.info(f"IGram found media")
+                    if data.get('url') or data.get('download_url'):
+                        media_url = data.get('url') or data.get('download_url')
+                        if media_url and 'instagram.com' not in media_url:  # Проверяем что это не редирект на логин
+                            logger.info(f"IGram found media: {media_url[:50]}...")
                             ext = '.jpg' if format_type == 'jpg' else '.mp4'
                             return await download_from_direct_url(media_url, ext.replace('.', ''), "igram")
     except Exception as e:
-        logger.warning(f"IGram error: {str(e)[:100]}")
+        logger.warning(f"IGram error: {str(e)[:80]}")
     
-    # Пробуем FastDL API (хорош для фото)
-    try:
-        logger.info("Trying FastDL API")
-        encoded_url = quote(url, safe='')
-        api_url = f"https://fastdl.app/api/instagram?url={encoded_url}"
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
-            headers = {
-                'User-Agent': config.DESKTOP_USER_AGENT,
-                'Accept': 'application/json',
-            }
-            async with session.get(api_url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('status') == 'success' and data.get('data'):
-                        items = data['data']
-                        if isinstance(items, list) and len(items) > 0:
-                            media_url = items[0].get('url') or items[0].get('src')
-                            if media_url:
-                                logger.info(f"FastDL found media")
-                                ext = '.jpg' if format_type == 'jpg' else '.mp4'
-                                return await download_from_direct_url(media_url, ext.replace('.', ''), "fastdl")
-    except Exception as e:
-        logger.warning(f"FastDL error: {str(e)[:100]}")
-    
-    # Пробуем SnapInsta (если работает)
-    try:
-        logger.info("Trying SnapInsta API")
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
-            data = {"url": url, "action": "post"}
-            headers = {
-                'User-Agent': config.DESKTOP_USER_AGENT,
-                'Referer': 'https://snapinsta.app/',
-                'X-Requested-With': 'XMLHttpRequest'
-            }
+    # FastDL - для фото без авторизации
+    if format_type == "jpg":
+        try:
+            logger.info("Trying FastDL API (photos only)")
+            encoded_url = quote(url, safe='')
+            api_url = f"https://fastdl.app/api/instagram?url={encoded_url}"
             
-            async with session.post(
-                "https://snapinsta.app/action.php",
-                data=data,
-                headers=headers
-            ) as response:
-                if response.status == 200:
-                    text = await response.text()
-                    
-                    # Ищем ссылки на видео/фото
-                    video_match = re.search(r'href="(https?://[^"]+\.mp4[^"]*)"', text, re.IGNORECASE)
-                    if video_match:
-                        video_url = video_match.group(1)
-                        logger.info(f"SnapInsta found video")
-                        return await download_from_direct_url(video_url, format_type, "snapinsta")
-                    
-                    # Ищем фото
-                    photo_match = re.search(r'href="(https?://[^"]+\.(?:jpg|jpeg|png)[^"]*)"', text, re.IGNORECASE)
-                    if photo_match and format_type == "jpg":
-                        photo_url = photo_match.group(1)
-                        logger.info(f"SnapInsta found photo")
-                        return await download_from_direct_url(photo_url, format_type, "snapinsta")
-    except Exception as e:
-        logger.warning(f"SnapInsta error: {str(e)[:100]}")
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json'
+                }
+                async with session.get(api_url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get('status') == 'success' and data.get('data'):
+                            items = data['data']
+                            if isinstance(items, list) and len(items) > 0:
+                                media_url = items[0].get('url') or items[0].get('src')
+                                if media_url and not any(blocked in media_url.lower() for blocked in ['login', '403']):
+                                    logger.info(f"FastDL found photo: {media_url[:50]}...")
+                                    return await download_from_direct_url(media_url, "jpg", "fastdl")
+        except Exception as e:
+            logger.warning(f"FastDL error: {str(e)[:80]}")
     
-    return False, "Instagram API не сработали"
+    # InstaDP - еще один вариант для фото
+    if format_type == "jpg":
+        try:
+            logger.info("Trying InstaDP API (photos only)")
+            encoded_url = quote(url, safe='')
+            api_url = f"https://instadp.com/api?url={encoded_url}"
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json'
+                }
+                async with session.get(api_url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get('url') and 'instadp.com' not in data['url']:
+                            media_url = data['url']
+                            logger.info(f"InstaDP found photo: {media_url[:50]}...")
+                            return await download_from_direct_url(media_url, "jpg", "instadp")
+        except Exception as e:
+            logger.warning(f"InstaDP error: {str(e)[:80]}")
+    
+    return False, "Instagram API без авторизации не сработали. Попробуйте другой пост."
 
 
 async def download_via_facebook_api(url: str, format_type: str) -> tuple[bool, str]:
