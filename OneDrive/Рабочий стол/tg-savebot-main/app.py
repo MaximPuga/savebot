@@ -653,6 +653,135 @@ async def download_via_alternative_api(url: str, format_type: str) -> tuple[bool
     return False, f"❌ Не удалось скачать {platform} через альтернативные API"
 
 
+# ==================== ФОТО СПЕЦИФИЧНЫЕ ФУНКЦИИ ====================
+async def download_via_instagram_photo_api(url: str) -> tuple[bool, str]:
+    """Метод через воркер SaveFrom.net специально для фото Instagram."""
+    api_url = "https://worker.sf-api.com/savefrom.php"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Origin": "https://uk.savefrom.net",
+        "Referer": "https://uk.savefrom.net/",
+    }
+    
+    payload = {
+        "url": url, "lang": "ru", "app": "sf", "referer": "https://uk.savefrom.net/"
+    }
+
+    try:
+        logger.info(f"Trying SaveFrom API for Instagram photo: {url}")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            async with session.post(api_url, data=payload, headers=headers) as response:
+                if response.status == 200:
+                    text = await response.text()
+                    # Ищем прямые ссылки на CDN Instagram (jpg)
+                    links = re.findall(r'href="([^"]+)"', text)
+                    media_links = [l for l in links if "scontent" in l or "cdninstagram" in l]
+                    
+                    if media_links:
+                        final_link = media_links[0].replace("&amp;", "&")
+                        return await download_from_direct_url(final_link, "jpg", "instagram")
+    except Exception as e:
+        logger.error(f"SaveFrom photo API Exception: {e}")
+    
+    return False, "SAVEFROM_FAILED"
+
+async def download_via_pinterest_photo_api(url: str) -> tuple[bool, str]:
+    """Метод для Pinterest фото."""
+    # Пробуем API Pinterest
+    apis = [
+        f"https://pinterestdownloader.com/download?url={quote(url, safe='')}",
+        f"https://pinloader.com/download?url={quote(url, safe='')}",
+    ]
+
+    for api_url in apis:
+        try:
+            logger.info(f"Trying Pinterest API: {api_url[:50]}...")
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                async with session.get(api_url, headers={'User-Agent': config.DESKTOP_USER_AGENT}) as response:
+                    if response.status == 200:
+                        content = await response.text()
+                        # Ищем ссылки на фото
+                        img_links = re.findall(r'href="([^"]+\.jpg[^"]*)"', content) + \
+                                   re.findall(r'src="([^"]+\.jpg[^"]*)"', content)
+
+                        if img_links:
+                            final_link = img_links[0].replace("&amp;", "&")
+                            return await download_from_direct_url(final_link, "jpg", "pinterest")
+        except Exception as e:
+            logger.warning(f"Pinterest API error: {str(e)}")
+            continue
+
+    return False, "PINTEREST_FAILED"
+
+async def download_via_facebook_photo_api(url: str) -> tuple[bool, str]:
+    """Метод для Facebook фото."""
+    try:
+        logger.info("Trying Facebook photo API")
+        encoded_url = quote(url, safe='')
+        api_url = f"https://sssfacebook.com/api?url={encoded_url}"
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            headers = {
+                'User-Agent': config.DESKTOP_USER_AGENT,
+                'Accept': 'application/json',
+                'Referer': 'https://sssfacebook.com/',
+            }
+            async with session.get(api_url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get('status') == 'success' and data.get('data'):
+                        items = data['data']
+                        if isinstance(items, list) and len(items) > 0:
+                            media_url = items[0].get('url') or items[0].get('src')
+                            if media_url:
+                                return await download_from_direct_url(media_url, "jpg", "facebook")
+    except Exception as e:
+        logger.warning(f"Facebook photo API error: {str(e)}")
+
+    return False, "FACEBOOK_FAILED"
+
+async def download_photo(url: str) -> tuple[bool, str]:
+    """Основная функция скачивания фото."""
+    platform = detect_platform(url)
+
+    if platform == "instagram":
+        success, result = await download_via_instagram_photo_api(url)
+        if success: return True, result
+
+    elif platform == "pinterest":
+        success, result = await download_via_pinterest_photo_api(url)
+        if success: return True, result
+
+    elif platform == "facebook":
+        success, result = await download_via_facebook_photo_api(url)
+        if success: return True, result
+
+    # Fallback через универсальные API
+    logger.info("Trying universal photo APIs...")
+    universal_apis = [
+        f"https://savefrom.net/download?url={quote(url, safe='')}",
+    ]
+
+    for api_url in universal_apis:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                async with session.get(api_url, headers={'User-Agent': config.DESKTOP_USER_AGENT}) as response:
+                    if response.status == 200:
+                        content = await response.text()
+                        # Ищем фото ссылки
+                        photo_links = re.findall(r'href="([^"]+\.jpg[^"]*)"', content) + \
+                                     re.findall(r'src="([^"]+\.jpg[^"]*)"', content)
+
+                        if photo_links:
+                            final_link = photo_links[0].replace("&amp;", "&")
+                            return await download_from_direct_url(final_link, "jpg", "universal")
+        except Exception:
+            continue
+
+    return False, "❌ Не удалось скачать фото. Попробуйте другую ссылку."
+
+
 # ==================== ОСНОВНАЯ ФУНКЦИЯ СКАЧИВАНИЯ ====================
 async def download_content(url: str, format_type: str) -> tuple[bool, str]:
     """Оптимизированная очередь скачивания без лишнего мусора."""
@@ -690,6 +819,33 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
 class SaveContent(StatesGroup):
     waiting_for_link = State()
 
+class SavePhoto(StatesGroup):
+    waiting_for_link = State()
+
+
+async def send_photo(message: types.Message, file_path: str):
+    """Отправляет фото пользователю и удаляет его."""
+    try:
+        file_size = os.path.getsize(file_path)
+
+        if file_size > MAX_FILE_SIZE:
+            await message.answer(
+                f"❌ Фото слишком большое ({file_size/1024/1024:.1f}MB). Максимум: 50MB"
+            )
+            return
+
+        await message.answer_photo(
+            photo=FSInputFile(file_path),
+            caption="✅ Фото успешно скачано!"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки: {str(e)}")
+    finally:
+        try:
+            os.remove(file_path)
+        except:
+            pass
+
 
 async def send_file(message: types.Message, file_path: str, format_type: str):
     """Отправляет файл пользователю и удаляет его."""
@@ -726,7 +882,7 @@ async def send_file(message: types.Message, file_path: str, format_type: str):
             pass
 
 
-HELP_TEXT = """🤖 **Справка по боту**
+HELP_TEXT = """🤖 **Универсальный бот для скачивания**
 
 Скачивайте видео и фото с популярных платформ!
 
@@ -739,13 +895,14 @@ HELP_TEXT = """🤖 **Справка по боту**
 • Twitter (видео, фото) ✅ Стабильно
 • VK (видео, фото) ✅ Надежно
 
-**Рекомендуем:** YouTube, VK, Twitter
+**Команды:**
+• 📥 Сохранить контент — видео/фото с выбором формата
+• 📸 Скачать фото — прямое скачивание фото
 
 **Как использовать:**
-1. Нажмите "📥 Сохранить контент"
+1. Выберите команду
 2. Отправьте ссылку
-3. Выберите формат
-4. Готово! 🎉
+3. Готово! 🎉
 
 Макс. размер файла: 50MB"""
 
@@ -758,6 +915,7 @@ async def start_handler(message: types.Message, state: FSMContext):
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📥 Сохранить контент")],
+            [KeyboardButton(text="📸 Скачать фото")],
             [KeyboardButton(text="ℹ️ Помощь")],
             [KeyboardButton(text="⚙️ Настройки")],
         ],
@@ -766,7 +924,7 @@ async def start_handler(message: types.Message, state: FSMContext):
     
     await message.answer(
         f"👋 Привет, {message.from_user.first_name}!\n\n"
-        "Я бот для скачивания видео и фото из социальных сетей.\n\n"
+        "Я универсальный бот для скачивания видео и фото из социальных сетей.\n\n"
         "✅ YouTube, Instagram, TikTok, Facebook, Pinterest, Twitter, VK\n\n"
         "Выберите действие:",
         reply_markup=keyboard
@@ -810,6 +968,42 @@ async def process_link(message: types.Message, state: FSMContext):
         reply_markup=kb,
         parse_mode="html"
     )
+
+
+@dp.message(lambda m: m.text == "📸 Скачать фото")
+async def save_photo_start(message: types.Message, state: FSMContext):
+    """Начало скачивания фото."""
+    await state.set_state(SavePhoto.waiting_for_link)
+    await message.answer(
+        "📎 Отправьте ссылку на фото.\n\n"
+        "Поддерживаются: Instagram, Pinterest, Facebook"
+    )
+
+
+@dp.message(SavePhoto.waiting_for_link)
+async def process_photo_link(message: types.Message, state: FSMContext):
+    """Обработка ссылки на фото."""
+    if not message.text:
+        await message.answer("❌ Отправьте текстовое сообщение с ссылкой")
+        return
+    
+    url = message.text.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await message.answer("❌ Отправьте корректную ссылку (http:// или https://)")
+        return
+
+    await state.update_data(link=url)
+
+    processing_msg = await message.answer("⏳ Скачиваю фото...")
+
+    success, result = await download_photo(url)
+
+    if success:
+        await send_photo(processing_msg, result)
+    else:
+        await processing_msg.edit_text(f"❌ Ошибка:\n{result}")
+
+    await state.clear()
 
 
 @dp.message(lambda m: m.text == "ℹ️ Помощь")
