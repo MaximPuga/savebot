@@ -327,19 +327,18 @@ async def download_via_tikwm(url: str) -> tuple[bool, str]:
 
 
 async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, str]:
-    """Скачивание через SaveFrom API (поддержка Фото и Видео)."""
-    logger.info(f"Запуск SaveFrom метода для: {url}")
-    
-    # SaveFrom API Endpoint
+    """Метод через воркер SaveFrom.net"""
     api_url = "https://worker.sf-api.com/savefrom.php"
     
+    # Очень важно: имитируем реальный браузер максимально точно
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Origin": "https://uk.savefrom.net",
-        "Referer": "https://uk.savefrom.net/"
+        "Referer": "https://uk.savefrom.net/",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     }
     
-    data = {
+    payload = {
         "url": url,
         "lang": "ru",
         "app": "sf",
@@ -347,34 +346,28 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
     }
 
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            async with session.post(api_url, data=data, headers=headers) as response:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            async with session.post(api_url, data=payload, headers=headers) as response:
                 if response.status != 200:
-                    return False, f"SaveFrom API Error: {response.status}"
+                    return False, f"SaveFrom error {response.status}"
                 
                 text = await response.text()
                 
-                # Ищем прямые ссылки на CDN Instagram (jpg или mp4)
-                # Регулярка ищет ссылки, которые начинаются на https и содержат scontent (сервера инсты)
-                links = re.findall(r'href="(https?://[^"]+scontent[^"]+)"', text)
+                # Ищем ссылки на CDN Instagram. Они обычно в параметре href
+                # Нам нужны те, где есть 'scontent' или 'cdninstagram'
+                links = re.findall(r'href="([^"]+)"', text)
+                media_links = [l for l in links if "scontent" in l or "cdninstagram" in l]
                 
-                if not links:
-                    # Пробуем найти вообще любые медиа-ссылки в ответе
-                    links = re.findall(r'href="(https?://[^"]+\.(?:jpg|jpeg|png|mp4)[^"]*)"', text)
-
-                if links:
-                    # Очищаем ссылку от HTML-сущностей (&amp; -> &)
-                    media_url = links[0].replace("&amp;", "&")
-                    logger.info(f"Найдена прямая ссылка: {media_url[:50]}...")
-                    
-                    # Скачиваем файл
-                    return await download_from_direct_url(media_url, format_type, "savefrom")
+                if media_links:
+                    # Чистим ссылку от спецсимволов
+                    final_link = media_links[0].replace("&amp;", "&")
+                    logger.info(f"Link found: {final_link[:50]}...")
+                    return await download_from_direct_url(final_link, format_type, "instagram")
                 
-                return False, "SaveFrom не нашел прямых ссылок на медиа"
-
+                return False, "Медиа-файлы не найдены в ответе API"
     except Exception as e:
-        logger.error(f"Ошибка в SaveFrom методе: {e}")
-        return False, str(e)
+        logger.error(f"SaveFrom API Exception: {e}")
+        return False, "Ошибка при обращении к сервису скачивания"
 
 
 async def download_via_facebook_api(url: str, format_type: str) -> tuple[bool, str]:
@@ -689,88 +682,14 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
     if cobalt_success:
         return True, cobalt_result
     
-    # Для Instagram пробуем yt-dlp с cookies (как советует Artem)
+    # Для Instagram сразу идем в API (пропуская yt-dlp)
     if platform == "instagram":
-        logger.info("Instagram detected, trying yt-dlp with cookies")
-        import yt_dlp
-        
-        download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
-        os.makedirs(download_dir, exist_ok=True)
-        
-        ydl_opts = {
-            'quiet': False,
-            'no_warnings': False,
-            'outtmpl': os.path.join(download_dir, f"%(title).{FILENAME_MAX_LEN}s.%(ext)s"),
-            'socket_timeout': 120,
-            'noplaylist': True,
-            'geo_bypass': True,
-            'no_color': False,
-            'extractor_retries': 15,
-            'fragment_retries': 15,
-            'retries': 15,
-            'file_access_retries': 10,
-            'fragment_timeout': 180,
-            'http_chunk_size': 1048576,
-            'ignoreerrors': False,
-            'no_check_certificate': True,
-            'prefer_free_formats': True,
-            'add_header': [
-                'Accept-Language: en-US,en;q=0.9',
-                'Sec-Ch-Ua: "Not_A Brand";v="8", "Chromium";v="120"',
-                'Sec-Ch-Ua-Mobile: ?0',
-                'Sec-Ch-Ua-Platform: "Windows"',
-            ],
-        }
-        
-        # Instagram specific options
-        ydl_opts.update({
-            'extractor_args': {'instagram': {'include_ads': False, 'enable_headers': True}},
-            'format': 'best[filesize<50M][ext=mp4]/worst[ext=mp4]',
-            'http_headers': {
-                'User-Agent': config.DESKTOP_USER_AGENT,
-                'Referer': 'https://www.instagram.com/',
-            },
-        })
-        
-        # Add Instagram cookies if available (critical for Railway)
-        if os.path.exists('instagram.com_cookies.txt'):
-            ydl_opts['cookiefile'] = 'instagram.com_cookies.txt'
-            logger.info("Instagram cookies loaded from file")
-        elif os.getenv('INSTAGRAM_COOKIES'):
-            # Alternative: cookies from environment variable
-            cookies_content = os.getenv('INSTAGRAM_COOKIES')
-            if cookies_content:
-                # Save cookies to temp file
-                import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-                    f.write(cookies_content)
-                    ydl_opts['cookiefile'] = f.name
-                logger.info("Instagram cookies loaded from env")
-        else:
-            logger.warning("No Instagram cookies found - Railway IPs are blocked!")
-        
-        def download_instagram():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(info)
-        
-        try:
-            timeout = TIMEOUT_INSTAGRAM
-            loop = asyncio.get_event_loop()
-            file_path = await asyncio.wait_for(loop.run_in_executor(None, download_instagram), timeout=timeout)
-            
-            if os.path.exists(file_path) and os.path.getsize(file_path) > MIN_FILE_SIZE:
-                return True, file_path
-            
-        except Exception as e:
-            logger.error(f"Instagram yt-dlp failed: {str(e)}")
-        
-        # Fallback to APIs if yt-dlp fails
-        logger.info("Instagram yt-dlp failed, trying APIs")
-        insta_success, insta_result = await download_via_instagram_api(original_url, format_type)
-        if insta_success:
-            return True, insta_result
-        return False, "Instagram недоступен. Добавьте cookies для обхода блокировки."
+        logger.info("Instagram detected: skipping yt-dlp, going straight to SaveFrom API")
+        # Вызываем нашу новую функцию через SaveFrom
+        success, result = await download_via_instagram_api(url, format_type)
+        if success:
+            return True, result
+        return False, "Не удалось получить фото/видео из Instagram. Попробуйте позже."
     
     # Для TikTok пробуем API
     if platform == "tiktok":
