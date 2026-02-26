@@ -194,8 +194,8 @@ async def handle_redirect_url(
 
 
 async def download_via_cobalt(url: str, format_type: str) -> tuple[bool, str]:
-    """Скачивает через Cobalt API v10 (актуальная версия)."""
-    # Список живых инстансов
+    """Скачивает через Cobalt API v10 (актуальная версия 2026)."""
+    # Используем проверенные инстансы
     cobalt_instances = [
         "https://api.cobalt.tools/api/download",
         "https://cobalt-api.mnd.sh/api/download",
@@ -208,25 +208,26 @@ async def download_via_cobalt(url: str, format_type: str) -> tuple[bool, str]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     }
     
-    # Актуальный payload для 2025 года
     payload = {
         "url": url,
-        "videoQuality": "720", # Оптимально для лимитов Telegram
+        "videoQuality": "720",
         "filenameStyle": "pretty"
     }
     
     for api_url in cobalt_instances:
         try:
+            logger.info(f"Trying Cobalt v10: {api_url}")
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
                 async with session.post(api_url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         data = await response.json()
-                        # Cobalt v10 возвращает 'url' или 'picker' (для каруселей)
-                        file_url = data.get("url")
+                        file_url = data.get("url") or data.get("stream")
                         if file_url:
                             return await download_from_direct_url(file_url, format_type, "cobalt")
+                    elif response.status == 400:
+                        logger.warning(f"Cobalt {api_url} returned 400 - check payload/url")
         except Exception as e:
-            logger.warning(f"Cobalt instance {api_url} failed: {e}")
+            logger.warning(f"Cobalt {api_url} error: {str(e)[:50]}")
             continue
     return False, "COBALT_FAILED"
 
@@ -327,15 +328,13 @@ async def download_via_tikwm(url: str) -> tuple[bool, str]:
 
 
 async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, str]:
-    """Метод через воркер SaveFrom.net"""
+    """Метод через воркер SaveFrom.net (самый живучий для фото)."""
     api_url = "https://worker.sf-api.com/savefrom.php"
     
-    # Очень важно: имитируем реальный браузер максимально точно
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Origin": "https://uk.savefrom.net",
         "Referer": "https://uk.savefrom.net/",
-        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     }
     
     payload = {
@@ -346,28 +345,31 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
     }
 
     try:
+        logger.info(f"Trying SaveFrom API for Instagram: {url}")
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
             async with session.post(api_url, data=payload, headers=headers) as response:
                 if response.status != 200:
                     return False, f"SaveFrom error {response.status}"
                 
                 text = await response.text()
-                
-                # Ищем ссылки на CDN Instagram. Они обычно в параметре href
-                # Нам нужны те, где есть 'scontent' или 'cdninstagram'
+                # Ищем ссылки на CDN Instagram
                 links = re.findall(r'href="([^"]+)"', text)
                 media_links = [l for l in links if "scontent" in l or "cdninstagram" in l]
                 
                 if media_links:
-                    # Чистим ссылку от спецсимволов
                     final_link = media_links[0].replace("&amp;", "&")
-                    logger.info(f"Link found: {final_link[:50]}...")
-                    return await download_from_direct_url(final_link, format_type, "instagram")
+                    return await download_from_direct_url(final_link, format_type, "instagram_sf")
                 
-                return False, "Медиа-файлы не найдены в ответе API"
+                # Попробуем альтернативный поиск если через href не вышло
+                if "url" in text:
+                    url_match = re.search(r'"url":\s*"([^"]+)"', text)
+                    if url_match:
+                        return await download_from_direct_url(url_match.group(1), format_type, "instagram_sf")
+                        
     except Exception as e:
         logger.error(f"SaveFrom API Exception: {e}")
-        return False, "Ошибка при обращении к сервису скачивания"
+    
+    return False, "SAVEFROM_FAILED"
 
 
 async def download_via_facebook_api(url: str, format_type: str) -> tuple[bool, str]:
@@ -667,54 +669,42 @@ async def download_via_alternative_api(url: str, format_type: str) -> tuple[bool
 
 # ==================== ОСНОВНАЯ ФУНКЦИЯ СКАЧИВАНИЯ ====================
 async def download_content(url: str, format_type: str) -> tuple[bool, str]:
-    """Основная функция скачивания через API (без yt-dlp)."""
-    
-    original_url = url
+    """Оптимизированная очередь скачивания."""
     platform = detect_platform(url)
-    selected_proxy = get_proxy_config()
-    
-    if selected_proxy:
-        logger.info("Proxy: %s", _mask_proxy(selected_proxy))
-    
-    # Общий fallback через Cobalt API (сделать самым первым - самый стабильный)
-    logger.info("Trying Cobalt API first (most stable)")
-    cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
-    if cobalt_success:
-        return True, cobalt_result
-    
-    # Для Instagram сразу идем в API (пропуская yt-dlp)
+    logger.info(f"Detected platform: {platform}")
+
+    # 1. Если Instagram - СРАЗУ идем в SaveFrom (yt-dlp на Railway для Инсты мертв)
     if platform == "instagram":
-        logger.info("Instagram detected: skipping yt-dlp, going straight to SaveFrom API")
-        # Вызываем нашу новую функцию через SaveFrom
         success, result = await download_via_instagram_api(url, format_type)
-        if success:
-            return True, result
-        return False, "Не удалось получить фото/видео из Instagram. Попробуйте позже."
-    
-    # Для TikTok пробуем API
+        if success: return True, result
+        
+        # Если SaveFrom подвел, пробуем Cobalt как запасной
+        success, result = await download_via_cobalt(url, format_type)
+        if success: return True, result
+        
+        return False, "Instagram заблокировал запрос. Попробуйте другую ссылку."
+
+    # 2. Для TikTok / YouTube / Facebook - сначала Cobalt (он быстрее всех)
+    logger.info("Trying Cobalt API...")
+    success, result = await download_via_cobalt(url, format_type)
+    if success: return True, result
+
+    # 3. Если Cobalt не справился, идем по специализированным API
     if platform == "tiktok":
-        logger.info("TikTok detected, trying APIs")
-        tikwm_success, tikwm_result = await download_via_tikwm(original_url)
-        if tikwm_success:
-            return True, tikwm_result
+        success, result = await download_via_tikwm(url)
+        if success: return True, result
     
-    # Для Facebook пробуем API
     if platform == "facebook":
-        logger.info("Facebook detected, trying APIs")
-        fb_success, fb_result = await download_via_facebook_api(original_url, format_type)
-        if fb_success:
-            return True, fb_result
-    
-    # Для YouTube пробуем API
+        success, result = await download_via_facebook_api(url, format_type)
+        if success: return True, result
+
     if platform == "youtube":
-        logger.info("YouTube detected, trying APIs")
-        yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
-        if yt_success:
-            return True, yt_result
-    
-    # Финальный fallback на альтернативные API
-    logger.info("Trying alternative APIs")
-    return await download_via_alternative_api(original_url, format_type)
+        success, result = await download_via_youtube_api(url, format_type)
+        if success: return True, result
+
+    # 4. Последний шанс - универсальный парсер
+    logger.info("Trying final alternative API fallback...")
+    return await download_via_alternative_api(url, format_type)
 
 
 # ==================== TELEGRAM HANDLERS ====================
