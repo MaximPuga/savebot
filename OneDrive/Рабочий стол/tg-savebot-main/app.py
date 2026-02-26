@@ -360,7 +360,41 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
     
     shortcode = shortcode_match.group(1)
     
-    # Method 1: InstaDownloader.net (simple API)
+    # Method 1: SaveFrom.net (highest priority - popular and reliable)
+    try:
+        logger.info("Trying SaveFrom.net method (highest priority)")
+        api_url = f"https://uk.savefrom.net/download?url={quote(url, safe='')}"
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Referer': 'https://uk.savefrom.net/'
+            }
+            async with session.get(api_url, headers=headers) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    
+                    # Look for download links
+                    import re
+                    # Try different patterns for SaveFrom.net
+                    patterns = [
+                        r'href="(https?://[^"]+instagram[^"]+\.(?:mp4|jpg|jpeg)[^"]*)"',
+                        r'data-url="(https?://[^"]+)"',
+                        r'value="(https?://[^"]+instagram[^"]+)"',
+                    ]
+                    
+                    for pattern in patterns:
+                        matches = re.findall(pattern, html, re.IGNORECASE)
+                        for match in matches:
+                            if 'instagram' in match and not any(blocked in match.lower() for blocked in ['login', 'auth']):
+                                logger.info(f"SaveFrom.net found media: {match[:50]}...")
+                                ext = '.jpg' if format_type == 'jpg' else '.mp4'
+                                return await download_from_direct_url(match, ext.replace('.', ''), "savefrom")
+    except Exception as e:
+        logger.warning(f"SaveFrom.net error: {str(e)[:80]}")
+    
+    # Method 2: InstaDownloader.net (simple API)
     try:
         logger.info("Trying InstaDownloader.net API")
         api_url = f"https://instadownloader.net/api?url=https://www.instagram.com/p/{shortcode}/"
@@ -369,7 +403,7 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json',
-                'Referer': 'https://instadownloader.net/'
+                'Referer': 'https://instadownloader.net/',
             }
             async with session.get(api_url, headers=headers) as response:
                 if response.status == 200:
@@ -383,28 +417,6 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
                                 return await download_from_direct_url(media_url, format_type, "instadownloader")
     except Exception as e:
         logger.warning(f"InstaDownloader.net error: {str(e)[:80]}")
-    
-    # Method 2: DDInstagram (direct download)
-    try:
-        logger.info("Trying DDInstagram API")
-        api_url = f"https://ddinstagram.com/api?url=https://www.instagram.com/p/{shortcode}/"
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Referer': 'https://ddinstagram.com/'
-            }
-            async with session.get(api_url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('url') or data.get('download_url'):
-                        media_url = data.get('url') or data.get('download_url')
-                        if media_url and 'instagram.com' not in media_url:
-                            logger.info(f"DDInstagram found media: {media_url[:50]}...")
-                            return await download_from_direct_url(media_url, format_type, "ddinstagram")
-    except Exception as e:
-        logger.warning(f"DDInstagram error: {str(e)[:80]}")
     
     # Method 3: InstaSave.com (alternative service)
     try:
