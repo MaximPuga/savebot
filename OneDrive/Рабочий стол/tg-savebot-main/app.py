@@ -339,39 +339,57 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
     
     shortcode = shortcode_match.group(1)
     
-    # Method 1: SaveFrom.net (highest priority - popular and reliable)
+    # Method 1: SaveFrom.net (internal API - highest priority)
     try:
-        logger.info("Trying SaveFrom.net method (highest priority)")
-        api_url = f"https://uk.savefrom.net/download?url={quote(url, safe='')}"
+        logger.info("Trying SaveFrom internal API (highest priority)")
+        # SaveFrom использует специальный API эндпоинт для запросов
+        api_url = "https://worker.sf-api.com/savefrom.php"
         
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Referer': 'https://uk.savefrom.net/'
-            }
-            async with session.get(api_url, headers=headers) as response:
-                if response.status == 200:
-                    html = await response.text()
+        payload = {
+            "url": url,
+            "lang": "ru",
+            "app": "sf",
+            "referer": "https://uk.savefrom.net/"
+        }
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Origin": "https://uk.savefrom.net",
+            "Referer": "https://uk.savefrom.net/",
+            "Accept": "*/*"
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            # SaveFrom часто требует POST запрос к своему воркеру
+            async with session.post(api_url, data=payload, headers=headers) as response:
+                if response.status != 200:
+                    logger.error(f"SaveFrom API error: {response.status}")
+                else:
+                    text = await response.text()
                     
-                    # Look for download links
+                    # Ответ от SaveFrom обычно содержит кусок JS кода (id="sf_result")
+                    # Ищем все ссылки на медиа (mp4 или jpg)
                     import re
-                    # Try different patterns for SaveFrom.net
-                    patterns = [
-                        r'href="(https?://[^"]+instagram[^"]+\.(?:mp4|jpg|jpeg)[^"]*)"',
-                        r'data-url="(https?://[^"]+)"',
-                        r'value="(https?://[^"]+instagram[^"]+)"',
-                    ]
+                    links = re.findall(r'href="([^"]+)"', text)
                     
-                    for pattern in patterns:
-                        matches = re.findall(pattern, html, re.IGNORECASE)
-                        for match in matches:
-                            if 'instagram' in match and not any(blocked in match.lower() for blocked in ['login', 'auth']):
-                                logger.info(f"SaveFrom.net found media: {match[:50]}...")
-                                ext = '.jpg' if format_type == 'jpg' else '.mp4'
-                                return await download_from_direct_url(match, ext.replace('.', ''), "savefrom")
+                    # Фильтруем ссылки, чтобы найти те, что ведут на Instagram CDN
+                    media_links = [l for l in links if "scontent" in l or "cdninstagram" in l]
+                    
+                    if media_links:
+                        # Берем первую подходящую ссылку
+                        final_link = media_links[0].replace("&amp;", "&")
+                        logger.info(f"SaveFrom found link: {final_link[:50]}...")
+                        
+                        # Скачиваем сам файл
+                        return await download_from_direct_url(final_link, format_type, "savefrom")
+                    
+                    # Если прямых ссылок нет, пробуем искать в подстроках (иногда они замаскированы)
+                    if "url" in text:
+                        url_match = re.search(r'"url":\s*"([^"]+)"', text)
+                        if url_match:
+                            return await download_from_direct_url(url_match.group(1), format_type, "savefrom")
     except Exception as e:
-        logger.warning(f"SaveFrom.net error: {str(e)[:80]}")
+        logger.warning(f"SaveFrom internal API error: {str(e)[:80]}")
     
     # Method 2: InstaDownloader.net (simple API)
     try:
