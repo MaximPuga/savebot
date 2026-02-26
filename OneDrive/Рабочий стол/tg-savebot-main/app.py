@@ -496,7 +496,39 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
     except Exception as e:
         logger.warning(f"Web scraping error: {str(e)[:80]}")
     
-    return False, "Все методы Instagram не сработали. Попробуйте другой пост или формат."
+    # Method 6: SaveFrom.net (popular download service)
+    try:
+        logger.info("Trying SaveFrom.net method")
+        api_url = f"https://uk.savefrom.net/download?url={quote(url, safe='')}"
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Referer': 'https://uk.savefrom.net/'
+            }
+            async with session.get(api_url, headers=headers) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    
+                    # Look for download links
+                    import re
+                    # Try different patterns for SaveFrom.net
+                    patterns = [
+                        r'href="(https?://[^"]+instagram[^"]+\.(?:mp4|jpg|jpeg)[^"]*)"',
+                        r'data-url="(https?://[^"]+)"',
+                        r'value="(https?://[^"]+instagram[^"]+)"',
+                    ]
+                    
+                    for pattern in patterns:
+                        matches = re.findall(pattern, html, re.IGNORECASE)
+                        for match in matches:
+                            if 'instagram' in match and not any(blocked in match.lower() for blocked in ['login', 'auth']):
+                                logger.info(f"SaveFrom.net found media: {match[:50]}...")
+                                ext = '.jpg' if format_type == 'jpg' else '.mp4'
+                                return await download_from_direct_url(match, ext.replace('.', ''), "savefrom")
+    except Exception as e:
+        logger.warning(f"SaveFrom.net error: {str(e)[:80]}")
 
 
 async def download_via_facebook_api(url: str, format_type: str) -> tuple[bool, str]:
