@@ -889,8 +889,7 @@ async def download_via_alternative_api(url: str, format_type: str) -> tuple[bool
 
 # ==================== ОСНОВНАЯ ФУНКЦИЯ СКАЧИВАНИЯ ====================
 async def download_content(url: str, format_type: str) -> tuple[bool, str]:
-    """Основная функция скачивания с yt-dlp и fallback на API."""
-    import yt_dlp  # Ленивый импорт
+    """Основная функция скачивания через API (без yt-dlp)."""
     
     original_url = url
     platform = detect_platform(url)
@@ -907,209 +906,36 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
             return True, insta_result
         return False, "Instagram API не сработали. Попробуйте другой пост или добавьте cookies."
     
-    # Базовые опции yt-dlp
-    download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
-    os.makedirs(download_dir, exist_ok=True)
-    
-    ydl_opts = {
-        'quiet': False,
-        'no_warnings': False,
-        'outtmpl': os.path.join(download_dir, f"%(title).{FILENAME_MAX_LEN}s.%(ext)s"),
-        'socket_timeout': 120,
-        'noplaylist': True,
-        'geo_bypass': True,
-        'no_color': False,
-        'extractor_retries': 15,
-        'fragment_retries': 15,
-        'retries': 15,
-        'file_access_retries': 10,
-        'fragment_timeout': 180,
-        'http_chunk_size': 1048576,
-        'ignoreerrors': False,
-        'no_check_certificate': True,
-        'prefer_free_formats': True,
-        'add_header': [
-            'Accept-Language: en-US,en;q=0.9',
-            'Sec-Ch-Ua: "Not_A Brand";v="8", "Chromium";v="120"',
-            'Sec-Ch-Ua-Mobile: ?0',
-            'Sec-Ch-Ua-Platform: "Windows"',
-        ],
-    }
-    
-    if selected_proxy:
-        ydl_opts['proxy'] = selected_proxy
-    
-    # Платформенно-специфичные опции
+    # Для TikTok пробуем API
     if platform == "tiktok":
-        ydl_opts.update({
-            'extractor_args': {
-                'tiktok': {
-                    'api_hostname': 'api16-normal-c-useast1a.tiktokv.com',
-                    'enable_headers': True,
-                    'app_name': 'musical_ly',
-                    'device_id': '7234567890123456789',
-                }
-            },
-            'format': 'best[filesize<50M][ext=mp4]/worst[ext=mp4]',
-            'http_headers': {
-                'User-Agent': config.MOBILE_USER_AGENT,
-                'Referer': 'https://www.tiktok.com/',
-            },
-            'socket_timeout': 60,
-            'retries': 3,
-        })
+        logger.info("TikTok detected, trying APIs")
+        tikwm_success, tikwm_result = await download_via_tikwm(original_url)
+        if tikwm_success:
+            return True, tikwm_result
     
-    elif platform == "instagram":
-        ydl_opts.update({
-            'extractor_args': {'instagram': {'include_ads': False, 'enable_headers': True}},
-            'format': 'best[filesize<50M][ext=mp4]/worst[ext=mp4]',
-            'http_headers': {
-                'User-Agent': config.DESKTOP_USER_AGENT,
-                'Referer': 'https://www.instagram.com/',
-            },
-        })
-        
-        # Add Instagram cookies if available
-        if os.path.exists(config.INSTAGRAM_COOKIES_FILE):
-            ydl_opts['cookiefile'] = config.INSTAGRAM_COOKIES_FILE
-            logger.info("Instagram cookies loaded from file")
-        elif os.getenv('INSTAGRAM_COOKIES'):
-            # Alternative: cookies from environment variable
-            cookies_content = os.getenv('INSTAGRAM_COOKIES')
-            if cookies_content:
-                # Save cookies to temp file
-                import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-                    f.write(cookies_content)
-                    ydl_opts['cookiefile'] = f.name
-                logger.info("Instagram cookies loaded from env")
+    # Для Facebook пробуем API
+    if platform == "facebook":
+        logger.info("Facebook detected, trying APIs")
+        fb_success, fb_result = await download_via_facebook_api(original_url, format_type)
+        if fb_success:
+            return True, fb_result
     
-    elif platform == "pinterest":
-        ydl_opts.update({
-            'format': 'best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best',
-            'http_headers': {
-                'User-Agent': config.DESKTOP_USER_AGENT,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            },
-            'socket_timeout': 90,
-        })
+    # Для YouTube пробуем API
+    if platform == "youtube":
+        logger.info("YouTube detected, trying APIs")
+        yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
+        if yt_success:
+            return True, yt_result
     
-    elif platform == "facebook":
-        ydl_opts.update({
-            'format': 'best[filesize<50M][ext=mp4]/worst[ext=mp4]',
-            'http_headers': {
-                'User-Agent': config.DESKTOP_USER_AGENT,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,video/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            },
-            'socket_timeout': 90,
-        })
+    # Общий fallback через Cobalt API
+    logger.info("Trying Cobalt API for all platforms")
+    cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
+    if cobalt_success:
+        return True, cobalt_result
     
-    elif platform == "youtube":
-        # Используем формат без HLS/m3u8 чтобы избежать 403 на фрагментах
-        ydl_opts.update({
-            'format': 'worst[protocol=https][ext=mp4]/worst[protocol=https]/worst[ext=mp4]/worst',
-            'socket_timeout': 60,
-            'retries': 3,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web'],
-                    'player_skip': ['webpage', 'config', 'js'],
-                }
-            },
-        })
-    
-    # Формат
-    if format_type == "mp4":
-        ydl_opts['format'] = ydl_opts.get('format', 'best[filesize<50M][ext=mp4]/worst[ext=mp4]')
-    elif format_type == "jpg":
-        ydl_opts.update({
-            'writethumbnail': True,
-            'write_all_thumbnails': True,
-            'skip_download': False,
-            'format': 'best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best',
-            'postprocessors': [],
-        })
-    
-    # Скачивание
-    def download():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return ydl.prepare_filename(info)
-    
-    try:
-        timeout = get_timeout(platform)
-        loop = asyncio.get_event_loop()
-        file_path = await asyncio.wait_for(loop.run_in_executor(None, download), timeout=timeout)
-        
-        # Проверка файла
-        if os.path.exists(file_path) and os.path.getsize(file_path) > MIN_FILE_SIZE:
-            return True, file_path
-        
-        # Fallback для YouTube
-        if platform == "youtube":
-            logger.info("YouTube file empty, trying alternative APIs")
-            yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
-            if yt_success:
-                return True, yt_result
-            
-            cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
-            if cobalt_success:
-                return True, cobalt_result
-        
-        return False, "❌ Файл не был скачан или пуст"
-    
-    except asyncio.TimeoutError:
-        return False, "❌ Превышено время ожидания"
-    
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Ошибка yt-dlp: {error_msg}")
-        
-        # Fallback на альтернативные API
-        error_triggers = [
-            "rate-limit", "login required", "403", "sigi state",
-            "unable to extract", "file is empty", "fragment", "forbidden"
-        ]
-        
-        if platform or any(err in error_msg.lower() for err in error_triggers):
-            # YouTube fallback
-            if platform == "youtube" or any(err in error_msg.lower() for err in ["403", "forbidden"]):
-                yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
-                if yt_success:
-                    return True, yt_result
-            
-            # Facebook fallback
-            if platform == "facebook":
-                fb_success, fb_result = await download_via_facebook_api(original_url, format_type)
-                if fb_success:
-                    return True, fb_result
-            
-            # TikTok fallback
-            if platform == "tiktok":
-                tikwm_success, tikwm_result = await download_via_tikwm(original_url)
-                if tikwm_success:
-                    return True, tikwm_result
-            
-            # Instagram fallback (удалено - теперь только API)
-            
-            # YouTube fallback (если еще не пробовали)
-            if platform == "youtube":
-                yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
-                if yt_success:
-                    return True, yt_result
-            
-            # Общий fallback (кроме Instagram - там только новые API)
-            if platform != "instagram":
-                return await download_via_alternative_api(original_url, format_type)
-        
-        # Стандартные ошибки
-        if "No video formats found" in error_msg:
-            return False, "❌ На этой странице нет видео/фото"
-        
-        clean_error = re.sub(r'\x1b\[[0-9;]*m', '', error_msg)
-        return False, f"❌ Ошибка: {clean_error[:200]}"
+    # Финальный fallback на альтернативные API
+    logger.info("Trying alternative APIs")
+    return await download_via_alternative_api(original_url, format_type)
 
 
 # ==================== TELEGRAM HANDLERS ====================
