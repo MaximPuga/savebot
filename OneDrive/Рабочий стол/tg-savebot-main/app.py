@@ -352,9 +352,9 @@ async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, 
     Альтернативные методы для Instagram без авторизации.
     Фокус на работающих сервисах.
     """
-    # Extract shortcode from URL
+    # Extract shortcode from URL (supports p/, reel/, stories/)
     import re
-    shortcode_match = re.search(r'/p/([^/?]+)', url)
+    shortcode_match = re.search(r'/(?:p|reel|stories)/([^/?]+)', url)
     if not shortcode_match:
         return False, "Не удалось извлечь Instagram shortcode"
     
