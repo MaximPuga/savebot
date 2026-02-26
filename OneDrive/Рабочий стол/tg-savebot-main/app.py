@@ -811,13 +811,13 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
     if selected_proxy:
         logger.info("Proxy: %s", _mask_proxy(selected_proxy))
     
-    # Для YouTube сначала пробуем Cobalt API (более надежный чем yt-dlp на datacenter IP)
-    if platform == "youtube":
-        logger.info("YouTube detected, trying Cobalt API first")
-        cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
-        if cobalt_success:
-            return True, cobalt_result
-        logger.info("Cobalt failed for YouTube, falling back to yt-dlp")
+    # Для Instagram пробуем API в первую очередь (без логина)
+    if platform == "instagram":
+        logger.info("Instagram detected, trying APIs first (no login required)")
+        insta_success, insta_result = await download_via_instagram_api(original_url, format_type)
+        if insta_success:
+            return True, insta_result
+        logger.info("Instagram APIs failed, falling back to yt-dlp")
     
     # Базовые опции yt-dlp
     download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
