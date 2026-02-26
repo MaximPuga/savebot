@@ -889,6 +889,21 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
                 'Referer': 'https://www.instagram.com/',
             },
         })
+        
+        # Add Instagram cookies if available
+        if os.path.exists(config.INSTAGRAM_COOKIES_FILE):
+            ydl_opts['cookiefile'] = config.INSTAGRAM_COOKIES_FILE
+            logger.info("Instagram cookies loaded from file")
+        elif os.getenv('INSTAGRAM_COOKIES'):
+            # Alternative: cookies from environment variable
+            cookies_content = os.getenv('INSTAGRAM_COOKIES')
+            if cookies_content:
+                # Save cookies to temp file
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                    f.write(cookies_content)
+                    ydl_opts['cookiefile'] = f.name
+                logger.info("Instagram cookies loaded from env")
     
     elif platform == "pinterest":
         ydl_opts.update({
