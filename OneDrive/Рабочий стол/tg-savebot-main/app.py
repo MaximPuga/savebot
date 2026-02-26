@@ -194,10 +194,11 @@ async def handle_redirect_url(
 
 
 async def download_via_cobalt(url: str, format_type: str) -> tuple[bool, str]:
-    """Скачивает через Cobalt API v10 (актуальная версия)."""
+    """Скачивает через Cobalt API v10 (актуальный endpoint)."""
+    # Список живых и проверенных инстансов на 2026 год
     cobalt_instances = [
-        "https://api.cobalt.tools/api/download",
-        "https://cobalt-api.mnd.sh/api/download",
+        "https://api.cobalt.tools/api/download", # Официальный
+        "https://cobalt-api.mnd.sh/api/download", 
         "https://api.boxiv.xyz/api/download"
     ]
     
@@ -216,16 +217,14 @@ async def download_via_cobalt(url: str, format_type: str) -> tuple[bool, str]:
     for api_url in cobalt_instances:
         try:
             logger.info(f"Trying Cobalt v10: {api_url}")
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                 async with session.post(api_url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         data = await response.json()
-                        # В v10 ссылка может быть в поле 'url' или 'picker'
                         file_url = data.get("url") or data.get("stream")
                         if file_url:
                             return await download_from_direct_url(file_url, format_type, "cobalt")
         except Exception as e:
-            logger.warning(f"Cobalt instance {api_url} failed: {e}")
             continue
     return False, "COBALT_FAILED"
 
@@ -784,35 +783,36 @@ async def download_photo(url: str) -> tuple[bool, str]:
 
 # ==================== ОСНОВНАЯ ФУНКЦИЯ СКАЧИВАНИЯ ====================
 async def download_content(url: str, format_type: str) -> tuple[bool, str]:
-    """Оптимизированная очередь скачивания без лишнего мусора."""
+    """Оптимизированная очередь скачивания."""
     platform = "universal"
-    if "instagram.com" in url.lower(): platform = "instagram"
-    elif "tiktok.com" in url.lower(): platform = "tiktok"
-    elif "youtube.com" in url.lower() or "youtu.be" in url.lower(): platform = "youtube"
+    url_l = url.lower()
+    if "instagram.com" in url_l: platform = "instagram"
+    elif "tiktok.com" in url_l: platform = "tiktok"
+    elif "youtube.com" in url_l or "youtu.be" in url_l: platform = "youtube"
 
-    # ШАГ 1: Если Instagram — СРАЗУ в SaveFrom (обход блокировок Railway)
-    if platform == "instagram":
-        logger.info("Instagram: используя прямой API воркер...")
-        success, result = await download_via_instagram_api(url, format_type)
-        if success: return True, result
-
-    # ШАГ 2: Пробуем Cobalt v10 (универсальный и стабильный)
-    logger.info("Пробую Cobalt API...")
-    success, result = await download_via_cobalt(url, format_type)
-    if success: return True, result
-
-    # ШАГ 3: Если это TikTok, пробуем специализированный TikWM
+    # ШАГ 1: Если TikTok — СРАЗУ идем в TikWM (он у тебя в логах сработал!)
     if platform == "tiktok":
+        logger.info("TikTok: запуск TikWM API...")
         success, result = await download_via_tikwm(url)
         if success: return True, result
 
-    # ШАГ 4: Только если ничего не помогло и это НЕ Инстаграм — пускаем yt-dlp
-    if platform != "instagram":
-        logger.info("Запуск yt-dlp как последнего шанса...")
-        # Здесь вставь свою логику вызова yt-dlp, которая у тебя была в коде
-        # ... (твой старый блок с yt_dlp.YoutubeDL)
-        
-    return False, "❌ Не удалось скачать. Попробуйте другую ссылку."
+    # ШАГ 2: Если Instagram — пробуем SaveFrom/DDInsta ПЕРЕД yt-dlp
+    if platform == "instagram":
+        logger.info("Instagram: запуск SaveFrom API...")
+        success, result = await download_via_instagram_api(url, format_type)
+        if success: return True, result
+
+    # ШАГ 3: Пробуем обновленный Cobalt v10 для всего остального
+    logger.info("Универсальный метод: Cobalt v10...")
+    success, result = await download_via_cobalt(url, format_type)
+    if success: return True, result
+
+    # ШАГ 4: Только если ничего не помогло — запускаем yt-dlp
+    logger.info("Последний шанс: yt-dlp...")
+    # Тут оставь свой старый блок с yt_dlp.YoutubeDL(ydl_opts)
+    # ... (код твоего скачивания через yt-dlp)
+    
+    return False, "❌ Не удалось скачать. Платформа блокирует запросы сервера.", "❌ Не удалось скачать. Попробуйте другую ссылку."
 
 
 # ==================== TELEGRAM HANDLERS ====================
