@@ -649,9 +649,8 @@ async def download_via_facebook_api(url: str, format_type: str) -> tuple[bool, s
 async def download_via_youtube_api(url: str, format_type: str) -> tuple[bool, str]:
     """
     Специализированные методы для YouTube.
-    Использует реальные API для скачивания видео.
+    Использует API для скачивания видео.
     """
-    import yt_dlp  # Для получения info и fallback
     
     # Извлекаем video ID
     patterns = [
@@ -735,60 +734,12 @@ async def download_via_youtube_api(url: str, format_type: str) -> tuple[bool, st
                         if 'items' in data:
                             logger.info(f"YT API confirmed video exists, trying fallback")
                             # Не дает прямой URL, но подтверждает что видео существует
-                            # Вернемся к yt-dlp с этим знанием
                             
         except Exception as e:
             logger.warning(f"YouTube API {api_url} error: {str(e)}")
             continue
     
-    # Fallback: пробуем yt-dlp с прокси (если доступен) и специальными опциями
-    logger.info("All YouTube APIs failed, trying yt-dlp with special options")
-    
-    # Пробуем yt-dlp с другими клиентами
-    try:
-        download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
-        os.makedirs(download_dir, exist_ok=True)
-        
-        # Пробуем разные клиенты YouTube
-        clients = ['android', 'web', 'ios', 'mweb']
-        
-        for client in clients:
-            try:
-                ydl_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'outtmpl': os.path.join(download_dir, f"%(title).{FILENAME_MAX_LEN}s.%(ext)s"),
-                    'format': 'best[protocol=https][ext=mp4]/best[ext=mp4]/best',
-                    'socket_timeout': 30,
-                    'retries': 2,
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': [client],
-                            'player_skip': ['webpage', 'config', 'js'] if client != 'web' else [],
-                        }
-                    },
-                }
-                
-                def download():
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
-                        return ydl.prepare_filename(info)
-                
-                loop = asyncio.get_event_loop()
-                file_path = await asyncio.wait_for(loop.run_in_executor(None, download), timeout=60)
-                
-                if os.path.exists(file_path) and os.path.getsize(file_path) > MIN_FILE_SIZE:
-                    logger.info(f"yt-dlp with {client} client succeeded")
-                    return True, file_path
-                    
-            except Exception as e:
-                logger.warning(f"yt-dlp with {client} client failed: {str(e)[:100]}")
-                continue
-                
-    except Exception as e:
-        logger.error(f"yt-dlp fallback error: {str(e)}")
-    
-    return False, "Все YouTube методы не сработали"
+    return False, "Все YouTube API не сработали"
 
 
 async def download_via_alternative_api(url: str, format_type: str) -> tuple[bool, str]:
