@@ -1104,12 +1104,9 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
                 if yt_success:
                     return True, yt_result
             
-            # Общий fallback
-            cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
-            if cobalt_success:
-                return True, cobalt_result
-            
-            return await download_via_alternative_api(original_url, format_type)
+            # Общий fallback (кроме Instagram - там только новые API)
+            if platform != "instagram":
+                return await download_via_alternative_api(original_url, format_type)
         
         # Стандартные ошибки
         if "No video formats found" in error_msg:
