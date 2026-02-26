@@ -899,13 +899,13 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
     if selected_proxy:
         logger.info("Proxy: %s", _mask_proxy(selected_proxy))
     
-    # Для Instagram пробуем API в первую очередь (без логина)
+    # Для Instagram только API (без yt-dlp)
     if platform == "instagram":
-        logger.info("Instagram detected, trying APIs first (no login required)")
+        logger.info("Instagram detected, using APIs only (no yt-dlp)")
         insta_success, insta_result = await download_via_instagram_api(original_url, format_type)
         if insta_success:
             return True, insta_result
-        logger.info("Instagram APIs failed, falling back to yt-dlp")
+        return False, "Instagram API не сработали. Попробуйте другой пост или добавьте cookies."
     
     # Базовые опции yt-dlp
     download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
@@ -1092,11 +1092,7 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
                 if tikwm_success:
                     return True, tikwm_result
             
-            # Instagram fallback
-            if platform == "instagram":
-                insta_success, insta_result = await download_via_instagram_api(original_url, format_type)
-                if insta_success:
-                    return True, insta_result
+            # Instagram fallback (удалено - теперь только API)
             
             # YouTube fallback (если еще не пробовали)
             if platform == "youtube":
