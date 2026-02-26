@@ -194,62 +194,41 @@ async def handle_redirect_url(
 
 
 async def download_via_cobalt(url: str, format_type: str) -> tuple[bool, str]:
-    """Скачивает через Cobalt API (новый API v8+)."""
-    # Новый Cobalt API (v8+) - упрощенный endpoint
+    """Скачивает через Cobalt API v10 (актуальная версия)."""
+    # Список живых инстансов
     cobalt_instances = [
         "https://api.cobalt.tools/api/download",
-        "https://cobalt.api.learner.alexi.sh/api/download",
-        "https://api.cobalt.lol/api/download",
+        "https://cobalt-api.mnd.sh/api/download",
+        "https://api.boxiv.xyz/api/download"
     ]
     
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": config.DESKTOP_USER_AGENT,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     }
     
-    # Новый упрощенный payload для v8
+    # Актуальный payload для 2025 года
     payload = {
         "url": url,
-        "downloadMode": "auto",
+        "videoQuality": "720", # Оптимально для лимитов Telegram
+        "filenameStyle": "pretty"
     }
     
     for api_url in cobalt_instances:
         try:
-            logger.info(f"Trying Cobalt v8: {api_url}")
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
                 async with session.post(api_url, headers=headers, json=payload) as response:
-                    logger.info(f"Cobalt v8 {api_url} status: {response.status}")
-                    
-                    if response.status in (200, 201):
-                        # v8 возвращает либо JSON с url, либо прямой редирект
-                        content_type = response.headers.get('Content-Type', '')
-                        
-                        if 'json' in content_type:
-                            data = await response.json()
-                            logger.info(f"Cobalt v8 JSON response: {data}")
-                            if data.get("url"):
-                                return await download_from_direct_url(data["url"], format_type, "cobalt_v8")
-                            elif data.get("stream"):
-                                return await download_from_direct_url(data["stream"], format_type, "cobalt_v8")
-                        else:
-                            # Может быть прямой редирект на файл
-                            final_url = str(response.url)
-                            if final_url != api_url:
-                                return await download_from_direct_url(final_url, format_type, "cobalt_v8")
-                    
-                    # Пробуем прочитать текст ответа
-                    text = await response.text()
-                    if response.status == 400 and "shut down" in text.lower():
-                        logger.warning(f"Cobalt v7 shutdown at {api_url}, skipping")
-                        continue
-                        
+                    if response.status == 200:
+                        data = await response.json()
+                        # Cobalt v10 возвращает 'url' или 'picker' (для каруселей)
+                        file_url = data.get("url")
+                        if file_url:
+                            return await download_from_direct_url(file_url, format_type, "cobalt")
         except Exception as e:
-            logger.warning(f"Cobalt v8 {api_url} exception: {str(e)[:100]}")
+            logger.warning(f"Cobalt instance {api_url} failed: {e}")
             continue
-    
-    # Fallback на старый метод если ничего не сработало
-    return False, "SERVER_UNAVAILABLE"
+    return False, "COBALT_FAILED"
 
 
 async def download_via_tikwm(url: str) -> tuple[bool, str]:
@@ -849,13 +828,94 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
     if selected_proxy:
         logger.info("Proxy: %s", _mask_proxy(selected_proxy))
     
-    # Для Instagram только API (без yt-dlp)
+    # Общий fallback через Cobalt API (сделать самым первым - самый стабильный)
+    logger.info("Trying Cobalt API first (most stable)")
+    cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
+    if cobalt_success:
+        return True, cobalt_result
+    
+    # Для Instagram пробуем yt-dlp с cookies (как советует Artem)
     if platform == "instagram":
-        logger.info("Instagram detected, using APIs only (no yt-dlp)")
+        logger.info("Instagram detected, trying yt-dlp with cookies")
+        import yt_dlp
+        
+        download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "telegram_bot")
+        os.makedirs(download_dir, exist_ok=True)
+        
+        ydl_opts = {
+            'quiet': False,
+            'no_warnings': False,
+            'outtmpl': os.path.join(download_dir, f"%(title).{FILENAME_MAX_LEN}s.%(ext)s"),
+            'socket_timeout': 120,
+            'noplaylist': True,
+            'geo_bypass': True,
+            'no_color': False,
+            'extractor_retries': 15,
+            'fragment_retries': 15,
+            'retries': 15,
+            'file_access_retries': 10,
+            'fragment_timeout': 180,
+            'http_chunk_size': 1048576,
+            'ignoreerrors': False,
+            'no_check_certificate': True,
+            'prefer_free_formats': True,
+            'add_header': [
+                'Accept-Language: en-US,en;q=0.9',
+                'Sec-Ch-Ua: "Not_A Brand";v="8", "Chromium";v="120"',
+                'Sec-Ch-Ua-Mobile: ?0',
+                'Sec-Ch-Ua-Platform: "Windows"',
+            ],
+        }
+        
+        # Instagram specific options
+        ydl_opts.update({
+            'extractor_args': {'instagram': {'include_ads': False, 'enable_headers': True}},
+            'format': 'best[filesize<50M][ext=mp4]/worst[ext=mp4]',
+            'http_headers': {
+                'User-Agent': config.DESKTOP_USER_AGENT,
+                'Referer': 'https://www.instagram.com/',
+            },
+        })
+        
+        # Add Instagram cookies if available (critical for Railway)
+        if os.path.exists('instagram.com_cookies.txt'):
+            ydl_opts['cookiefile'] = 'instagram.com_cookies.txt'
+            logger.info("Instagram cookies loaded from file")
+        elif os.getenv('INSTAGRAM_COOKIES'):
+            # Alternative: cookies from environment variable
+            cookies_content = os.getenv('INSTAGRAM_COOKIES')
+            if cookies_content:
+                # Save cookies to temp file
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                    f.write(cookies_content)
+                    ydl_opts['cookiefile'] = f.name
+                logger.info("Instagram cookies loaded from env")
+        else:
+            logger.warning("No Instagram cookies found - Railway IPs are blocked!")
+        
+        def download_instagram():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info)
+        
+        try:
+            timeout = TIMEOUT_INSTAGRAM
+            loop = asyncio.get_event_loop()
+            file_path = await asyncio.wait_for(loop.run_in_executor(None, download_instagram), timeout=timeout)
+            
+            if os.path.exists(file_path) and os.path.getsize(file_path) > MIN_FILE_SIZE:
+                return True, file_path
+            
+        except Exception as e:
+            logger.error(f"Instagram yt-dlp failed: {str(e)}")
+        
+        # Fallback to APIs if yt-dlp fails
+        logger.info("Instagram yt-dlp failed, trying APIs")
         insta_success, insta_result = await download_via_instagram_api(original_url, format_type)
         if insta_success:
             return True, insta_result
-        return False, "Instagram API не сработали. Попробуйте другой пост или добавьте cookies."
+        return False, "Instagram недоступен. Добавьте cookies для обхода блокировки."
     
     # Для TikTok пробуем API
     if platform == "tiktok":
@@ -877,12 +937,6 @@ async def download_content(url: str, format_type: str) -> tuple[bool, str]:
         yt_success, yt_result = await download_via_youtube_api(original_url, format_type)
         if yt_success:
             return True, yt_result
-    
-    # Общий fallback через Cobalt API
-    logger.info("Trying Cobalt API for all platforms")
-    cobalt_success, cobalt_result = await download_via_cobalt(original_url, format_type)
-    if cobalt_success:
-        return True, cobalt_result
     
     # Финальный fallback на альтернативные API
     logger.info("Trying alternative APIs")
