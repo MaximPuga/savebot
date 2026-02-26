@@ -327,217 +327,54 @@ async def download_via_tikwm(url: str) -> tuple[bool, str]:
 
 
 async def download_via_instagram_api(url: str, format_type: str) -> tuple[bool, str]:
-    """
-    Альтернативные методы для Instagram без авторизации.
-    Фокус на работающих сервисах.
-    """
-    # Extract shortcode from URL (supports p/, reel/, stories/)
-    import re
-    shortcode_match = re.search(r'/(?:p|reel|stories)/([^/?]+)', url)
-    if not shortcode_match:
-        return False, "Не удалось извлечь Instagram shortcode"
+    """Скачивание через SaveFrom API (поддержка Фото и Видео)."""
+    logger.info(f"Запуск SaveFrom метода для: {url}")
     
-    shortcode = shortcode_match.group(1)
+    # SaveFrom API Endpoint
+    api_url = "https://worker.sf-api.com/savefrom.php"
     
-    # Method 1: SaveFrom.net (internal API - highest priority)
-    try:
-        logger.info("Trying SaveFrom internal API (highest priority)")
-        # SaveFrom использует специальный API эндпоинт для запросов
-        api_url = "https://worker.sf-api.com/savefrom.php"
-        
-        payload = {
-            "url": url,
-            "lang": "ru",
-            "app": "sf",
-            "referer": "https://uk.savefrom.net/"
-        }
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Origin": "https://uk.savefrom.net",
-            "Referer": "https://uk.savefrom.net/",
-            "Accept": "*/*"
-        }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Origin": "https://uk.savefrom.net",
+        "Referer": "https://uk.savefrom.net/"
+    }
+    
+    data = {
+        "url": url,
+        "lang": "ru",
+        "app": "sf",
+        "referer": "https://uk.savefrom.net/"
+    }
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            # SaveFrom часто требует POST запрос к своему воркеру
-            async with session.post(api_url, data=payload, headers=headers) as response:
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with session.post(api_url, data=data, headers=headers) as response:
                 if response.status != 200:
-                    logger.error(f"SaveFrom API error: {response.status}")
-                else:
-                    text = await response.text()
+                    return False, f"SaveFrom API Error: {response.status}"
+                
+                text = await response.text()
+                
+                # Ищем прямые ссылки на CDN Instagram (jpg или mp4)
+                # Регулярка ищет ссылки, которые начинаются на https и содержат scontent (сервера инсты)
+                links = re.findall(r'href="(https?://[^"]+scontent[^"]+)"', text)
+                
+                if not links:
+                    # Пробуем найти вообще любые медиа-ссылки в ответе
+                    links = re.findall(r'href="(https?://[^"]+\.(?:jpg|jpeg|png|mp4)[^"]*)"', text)
+
+                if links:
+                    # Очищаем ссылку от HTML-сущностей (&amp; -> &)
+                    media_url = links[0].replace("&amp;", "&")
+                    logger.info(f"Найдена прямая ссылка: {media_url[:50]}...")
                     
-                    # Ответ от SaveFrom обычно содержит кусок JS кода (id="sf_result")
-                    # Ищем все ссылки на медиа (mp4 или jpg)
-                    import re
-                    links = re.findall(r'href="([^"]+)"', text)
-                    
-                    # Фильтруем ссылки, чтобы найти те, что ведут на Instagram CDN
-                    media_links = [l for l in links if "scontent" in l or "cdninstagram" in l]
-                    
-                    if media_links:
-                        # Берем первую подходящую ссылку
-                        final_link = media_links[0].replace("&amp;", "&")
-                        logger.info(f"SaveFrom found link: {final_link[:50]}...")
-                        
-                        # Скачиваем сам файл
-                        return await download_from_direct_url(final_link, format_type, "savefrom")
-                    
-                    # Если прямых ссылок нет, пробуем искать в подстроках (иногда они замаскированы)
-                    if "url" in text:
-                        url_match = re.search(r'"url":\s*"([^"]+)"', text)
-                        if url_match:
-                            return await download_from_direct_url(url_match.group(1), format_type, "savefrom")
+                    # Скачиваем файл
+                    return await download_from_direct_url(media_url, format_type, "savefrom")
+                
+                return False, "SaveFrom не нашел прямых ссылок на медиа"
+
     except Exception as e:
-        logger.warning(f"SaveFrom internal API error: {str(e)[:80]}")
-    
-    # Method 2: InstaDownloader.net (simple API)
-    try:
-        logger.info("Trying InstaDownloader.net API")
-        api_url = f"https://instadownloader.net/api?url=https://www.instagram.com/p/{shortcode}/"
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Referer': 'https://instadownloader.net/',
-            }
-            async with session.get(api_url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('success') and data.get('data'):
-                        media_data = data['data']
-                        if isinstance(media_data, list) and len(media_data) > 0:
-                            media_url = media_data[0].get('url') or media_data[0].get('download_url')
-                            if media_url and not any(blocked in media_url.lower() for blocked in ['login', 'auth']):
-                                logger.info(f"InstaDownloader.net found media: {media_url[:50]}...")
-                                return await download_from_direct_url(media_url, format_type, "instadownloader")
-    except Exception as e:
-        logger.warning(f"InstaDownloader.net error: {str(e)[:80]}")
-    
-    # Method 3: InstaSave.com (alternative service)
-    try:
-        logger.info("Trying InstaSave.com API")
-        api_url = f"https://instasave.com/api?url=https://www.instagram.com/p/{shortcode}/"
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
-            }
-            async with session.get(api_url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('success') and data.get('data'):
-                        items = data['data']
-                        if isinstance(items, list) and len(items) > 0:
-                            media_url = items[0].get('url') or items[0].get('src')
-                            if media_url and not any(blocked in media_url.lower() for blocked in ['login', '403']):
-                                logger.info(f"InstaSave.com found media: {media_url[:50]}...")
-                                return await download_from_direct_url(media_url, format_type, "instasave")
-    except Exception as e:
-        logger.warning(f"InstaSave.com error: {str(e)[:80]}")
-    
-    # Method 4: SaveInstagram.com (another service)
-    try:
-        logger.info("Trying SaveInstagram.com API")
-        api_url = f"https://saveinstagram.com/api?url=https://www.instagram.com/p/{shortcode}/"
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Referer': 'https://saveinstagram.com/'
-            }
-            async with session.get(api_url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('url') and data.get('type') in ['image', 'photo']:
-                        media_url = data['url']
-                        logger.info(f"SaveInstagram.com found photo: {media_url[:50]}...")
-                        return await download_from_direct_url(media_url, "jpg", "saveinstagram")
-    except Exception as e:
-        logger.warning(f"SaveInstagram.com error: {str(e)[:80]}")
-    
-    # Method 5: Direct web scraping approach (last resort)
-    try:
-        logger.info("Trying direct web scraping")
-        page_url = f"https://www.instagram.com/p/{shortcode}/"
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Upgrade-Insecure-Requests': '1'
-            }
-            async with session.get(page_url, headers=headers) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    
-                    # Look for JSON data in script tags
-                    import re
-                    json_match = re.search(r'window\._sharedData\s*=\s*({.+?});', html)
-                    if json_match:
-                        try:
-                            shared_data = json.loads(json_match.group(1))
-                            media = shared_data.get('entry_data', {}).get('PostPage', [{}])[0].get('graphql', {}).get('shortcode_media', {})
-                            
-                            if media.get('__typename') == 'GraphImage':
-                                display_url = media.get('display_url')
-                                if display_url:
-                                    logger.info(f"Web scraping found photo: {display_url[:50]}...")
-                                    return await download_from_direct_url(display_url, "jpg", "web_scraping")
-                        except:
-                            pass
-                    
-                    # Fallback: look for image URLs in HTML
-                    img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-                    if img_match:
-                        img_url = img_match.group(1)
-                        if 'instagram' in img_url:
-                            logger.info(f"Web scraping found og:image: {img_url[:50]}...")
-                            return await download_from_direct_url(img_url, "jpg", "web_scraping")
-    except Exception as e:
-        logger.warning(f"Web scraping error: {str(e)[:80]}")
-    
-    # Method 6: SaveFrom.net (popular download service)
-    try:
-        logger.info("Trying SaveFrom.net method")
-        api_url = f"https://uk.savefrom.net/download?url={quote(url, safe='')}"
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Referer': 'https://uk.savefrom.net/'
-            }
-            async with session.get(api_url, headers=headers) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    
-                    # Look for download links
-                    import re
-                    # Try different patterns for SaveFrom.net
-                    patterns = [
-                        r'href="(https?://[^"]+instagram[^"]+\.(?:mp4|jpg|jpeg)[^"]*)"',
-                        r'data-url="(https?://[^"]+)"',
-                        r'value="(https?://[^"]+instagram[^"]+)"',
-                    ]
-                    
-                    for pattern in patterns:
-                        matches = re.findall(pattern, html, re.IGNORECASE)
-                        for match in matches:
-                            if 'instagram' in match and not any(blocked in match.lower() for blocked in ['login', 'auth']):
-                                logger.info(f"SaveFrom.net found media: {match[:50]}...")
-                                ext = '.jpg' if format_type == 'jpg' else '.mp4'
-                                return await download_from_direct_url(match, ext.replace('.', ''), "savefrom")
-    except Exception as e:
-        logger.warning(f"SaveFrom.net error: {str(e)[:80]}")
+        logger.error(f"Ошибка в SaveFrom методе: {e}")
+        return False, str(e)
 
 
 async def download_via_facebook_api(url: str, format_type: str) -> tuple[bool, str]:
