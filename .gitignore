@@ -1,0 +1,8 @@
+OneDrive/
+__pycache__/
+*.py[cod]
+token.txt
+instagram_cookies.txt
+tiktok_cookies.txt
+facebook_cookies.txt
+pinterest_cookies.txt
